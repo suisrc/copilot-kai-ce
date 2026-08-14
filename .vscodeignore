@@ -14,9 +14,3 @@ package-lock.json
 node_modules/.bin/**
 node_modules/@types/**
 node_modules/typescript/**
-
-# gpt-tokenizer:只保留 CommonJS 运行时代码,排除体积大的冗余目录
-node_modules/gpt-tokenizer/data/**
-node_modules/gpt-tokenizer/esm/**
-node_modules/gpt-tokenizer/dist/**
-node_modules/gpt-tokenizer/src/**

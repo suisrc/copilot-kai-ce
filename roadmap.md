@@ -154,7 +154,6 @@ extensionsCG/copilot-kai-ce/
 - [x] P2 配置 schema 补全 customendpoint 剩余字段（`editTools`、`zeroDataRetentionEnabled`、`supportsReasoningEffort`、`reasoningEffortFormat`、`defaultReasoningEffort`）——全部已实现：`editTools` 传递到 capabilities（`enabledApiProposals` 已移除，运行时为 `undefined` 被 VS Code 忽略）、`zeroDataRetentionEnabled` 控制 Responses API `store`（不依赖 proposed API）、`applyReasoningEffort` 使用 `defaultReasoningEffort` 写入请求体（picker 因 proposed API 移除不再渲染）
 - [x] P3 内联提示词(inline completion)——已实现：`completions.ts` `KaiInlineCompletionProvider`，FIM prompt+suffix 请求，独立于 Copilot 登录/订阅。`kaicustomendpoint.inlineCompletion` 配置（`pattern` + 可选 `language`/`prompt` + `model`），`url` 为全地址不做路径拼接。stable API 一次性返回（渐进式渲染为 Copilot 私有通道，不支持）
 - [ ] P4 实际端点联调测试(本地 Ollama / vLLM 网关)
-- [ ] P5 清理残留:`.vscodeignore` 中 gpt-tokenizer 排除规则、`package-lock.json` 中 gpt-tokenizer 依赖项(如已从 package.json 移除,可用 `npm install` 刷新锁文件)
 
 ## 九、proposed API 使用说明
 
