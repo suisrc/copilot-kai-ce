@@ -1,0 +1,22 @@
+.vscode/**
+src/**
+tsconfig.json
+**/*.map
+**/*.ts
+.gitignore
+
+# 开发文档/构建文件,不需要打包进 vsix
+roadmap.md
+Makefile
+package-lock.json
+
+# 排除 devDependencies 的 node_modules
+node_modules/.bin/**
+node_modules/@types/**
+node_modules/typescript/**
+
+# gpt-tokenizer:只保留 CommonJS 运行时代码,排除体积大的冗余目录
+node_modules/gpt-tokenizer/data/**
+node_modules/gpt-tokenizer/esm/**
+node_modules/gpt-tokenizer/dist/**
+node_modules/gpt-tokenizer/src/**

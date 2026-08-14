@@ -1,0 +1,223 @@
+{
+  "name": "kai-customendpoint",
+  "displayName": "Kai Custom Endpoint",
+  "description": "基于 customendpoint 模型供应商重构的对话模型供应商。模型配置与 API Key 明文保存在 settings.json（kaicustomendpoint.models）中，避免 Web 版本 chatLanguageModels.json 仅存于浏览器 IndexedDB 导致刷新后丢失的问题。",
+  "version": "0.0.1",
+  "publisher": "kai",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.98.0"
+  },
+  "categories": [
+    "AI",
+    "Other"
+  ],
+  "main": "./out/extension.js",
+  "enabledApiProposals": [
+    "chatProvider"
+  ],
+  "activationEvents": [
+    "onLanguageModelChatProvider:kaicustomendpoint"
+  ],
+  "contributes": {
+    "languageModelChatProviders": [
+      {
+        "vendor": "kaicustomendpoint",
+        "displayName": "Kai Custom Endpoint"
+      }
+    ],
+    "configuration": {
+      "title": "Kai Custom Endpoint",
+      "properties": {
+        "kaicustomendpoint.models": {
+          "type": "array",
+          "markdownDescription": "对话模型供应商分组配置。结构与 `chatLanguageModels.json` 保持一致（provider groups 数组）。**注意：API Key 为明文存储，请勿将含密钥的 settings.json 提交到代码仓库。**\n\n每组必须包含 `name` 与 `models`，`vendor` 请固定为 `customendpoint`（致敬官方命名）。",
+          "default": [],
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "models"
+            ],
+            "properties": {
+              "vendor": {
+                "type": "string",
+                "const": "customendpoint",
+                "default": "customendpoint",
+                "description": "供应商 ID，固定为 customendpoint（致敬官方命名，与 chatLanguageModels.json 保持一致）。注意：本扩展的注册 ID 为 kaicustomendpoint，两者不同。"
+              },
+              "name": {
+                "type": "string",
+                "description": "分组名称，模型选择器中用于区分同供应商的多个分组"
+              },
+              "apiKey": {
+                "type": "string",
+                "default": "",
+                "markdownDescription": "API Key（**明文存储**）。留空则请求时不带 Authorization 头（适用于本地无鉴权网关）。"
+              },
+              "apiType": {
+                "type": "string",
+                "enum": [
+                  "chat-completions",
+                  "responses",
+                  "messages"
+                ],
+                "enumItemLabels": [
+                  "Chat Completions",
+                  "Responses",
+                  "Messages"
+                ],
+                "enumDescriptions": [
+                  "Chat Completions API（默认，完整支持）",
+                  "Responses API（完整支持）",
+                  "Messages API（完整支持）"
+                ],
+                "default": "chat-completions",
+                "title": "API Type",
+                "markdownDescription": "分组默认的请求/响应格式。单个模型可通过自身 `apiType` 覆盖；两者都未设置时根据 URL 路径推断。"
+              },
+              "url": {
+                "type": "string",
+                "pattern": "^https?://.+",
+                "patternErrorMessage": "URL 必须以 http:// 或 https:// 开头",
+                "markdownDescription": "分组级默认 Base URL。单个模型可通过自身 `url` 覆盖。支持显式 API 路径（`/chat/completions`、`/responses`、`/messages`），否则自动拼接 `/v1` + API 路径。"
+              },
+              "models": {
+                "type": "array",
+                "description": "该分组下的模型列表",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "id"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "description": "模型 ID，请求时作为 OpenAI `model` 字段发送"
+                    },
+                    "name": {
+                      "type": "string",
+                      "description": "显示名称，缺省时使用 id"
+                    },
+                    "url": {
+                      "type": "string",
+                      "pattern": "^https?://.+",
+                      "patternErrorMessage": "URL 必须以 http:// 或 https:// 开头",
+                      "markdownDescription": "该模型专用端点 URL。缺省时使用分组级 `url`。"
+                    },
+                    "apiType": {
+                      "type": "string",
+                      "enum": [
+                        "chat-completions",
+                        "responses",
+                        "messages"
+                      ],
+                      "default": "chat-completions",
+                      "description": "模型级 API 类型覆盖，缺省时回退分组级 apiType"
+                    },
+                    "maxInputTokens": {
+                      "type": "number",
+                      "markdownDescription": "最大输入 token 数。设置了 `contextWindow` 时可省略，将推导为 `contextWindow - maxOutputTokens`。"
+                    },
+                    "maxOutputTokens": {
+                      "type": "number",
+                      "default": 8192,
+                      "description": "最大输出 token 数"
+                    },
+                    "contextWindow": {
+                      "type": "number",
+                      "markdownDescription": "完整上下文窗口（输入+输出）token 数。设置后作为上下文窗口的依据。"
+                    },
+                    "toolCalling": {
+                      "type": "boolean",
+                      "default": true,
+                      "description": "模型是否支持工具调用"
+                    },
+                    "vision": {
+                      "type": "boolean",
+                      "default": false,
+                      "description": "模型是否支持图片输入"
+                    },
+                    "thinking": {
+                      "type": "boolean",
+                      "default": false,
+                      "description": "模型是否支持思考能力（reasoning）"
+                    },
+                    "streaming": {
+                      "type": "boolean",
+                      "default": true,
+                      "description": "模型是否支持流式输出"
+                    },
+                    "editTools": {
+                      "type": "array",
+                      "markdownDescription": "模型支持的编辑工具列表。未配置时编辑器会自动尝试多种编辑工具并选择最佳者。\n\n- `find-replace`：在文档中查找并替换文本\n- `multi-find-replace`：在文档中查找并替换多段文本\n- `apply-patch`：部分 OpenAI 模型使用的面向文件的 diff 格式\n- `code-rewrite`：通用但较慢的编辑工具，允许模型重写代码片段\n\n**注意：此字段依赖 proposed API（`chatProvider`），当前扩展未声明该 API，配置后暂不生效。",
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "find-replace",
+                          "multi-find-replace",
+                          "apply-patch",
+                          "code-rewrite"
+                        ]
+                      }
+                    },
+                    "zeroDataRetentionEnabled": {
+                      "type": "boolean",
+                      "default": false,
+                      "markdownDescription": "是否为此端点启用零数据保留（ZDR）。启用后 Responses API 请求中不会发送 `previous_response_id`。"
+                    },
+                    "supportsReasoningEffort": {
+                      "type": "array",
+                      "markdownDescription": "模型接受的推理努力级别（如 `[\\\"low\\\", \\\"medium\\\", \\\"high\\\"]`）。主流 OpenAI 兼容服务器支持的级别有 `minimal`、`low`、`medium`、`high`。\n\n**注意：模型选择器中的「Thinking Effort」picker 依赖 proposed API（`chatProvider`），当前扩展未声明。但配合 `defaultReasoningEffort` 字段可设置默认值，请求时会直接写入请求体，不依赖 picker。",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "defaultReasoningEffort": {
+                      "type": "string",
+                      "markdownDescription": "默认推理努力级别（如 `medium`）。设置后请求时直接写入请求体，不依赖 proposed API。须在 `supportsReasoningEffort` 列表中。"
+                    },
+                    "reasoningEffortFormat": {
+                      "type": "string",
+                      "enum": [
+                        "chat-completions",
+                        "responses",
+                        "messages"
+                      ],
+                      "markdownDescription": "将推理努力级别转发给模型时使用的请求体格式。`chat-completions` 发送顶层 `reasoning_effort` 字符串；`responses` 发送嵌套的 `reasoning.effort` 对象；`messages` 发送 Anthropic Messages 的 `output_config.effort` 字段。未设置时根据模型 `apiType` 推断：`responses` → 嵌套，`messages` → `output_config.effort`，`chat-completions` → 顶层。"
+                    },
+                    "requestHeaders": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "string"
+                      },
+                      "description": "附加请求头。`authorization` 与 `api-key` 可覆盖默认的 Bearer 鉴权头（如自定义网关鉴权方式）"
+                    },
+                    "modelOptions": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "description": "透传给请求体的模型参数（如 temperature 等）"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.98.0",
+    "@vscode/vsce": "^3.9.2",
+    "typescript": "^5.4.0"
+  },
+  "dependencies": {
+    "gpt-tokenizer": "^3.4.0"
+  }
+}
