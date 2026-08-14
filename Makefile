@@ -70,6 +70,11 @@ dist:
 
 package: build $(VSIX)
 
+# 发布(需要 VSCE_PAT 或登录)
+publish:
+	$(VSCE) publish
+	@echo "==> 发布完成"
+
 vsix: $(VSIX)
 
 # --- 清理 ---
