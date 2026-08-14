@@ -3,13 +3,14 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { encode } from 'gpt-tokenizer/cjs/encoding/o200k_base';
+import { estimateTokens } from './cjs_encode';
 
 /**
  * Token 计数。
  *
- * 整体参考 VS Code Copilot 扩展的 `extensions/copilot/src/platform/tokenizer/node/tokenizer.ts`
- * （BPETokenizer）。使用真实的 BPE 编码（o200k_base）而不是字符近似。
+ * 使用轻量级字符估算（cjs_encode.ts），不依赖 BPE 编码库。
+ * 误差通常在 ±10% 以内，对 token 计数显示和上下文窗口检查足够用。
+ * 原方案基于 `gpt-tokenizer` 的 `o200k_base` BPE 编码，详见 cjs_encode.ts 中的背景说明。
  */
 
 /** BaseTokensPerCompletion 是最小补全请求 token 数(与 customendpoint 一致) */
@@ -55,14 +56,14 @@ class LRUCache<T> {
 
 const tokenCache = new LRUCache<number>(5000);
 
-/** 真实 BPE 编码计算文本 token 长度 */
+/** 估算文本 token 长度 */
 function textTokenLength(text: string): number {
 	if (!text) {
 		return 0;
 	}
 	let cached = tokenCache.get(text);
 	if (cached === undefined) {
-		cached = encode(text).length;
+		cached = estimateTokens(text);
 		tokenCache.put(text, cached);
 	}
 	return cached;
@@ -270,7 +271,7 @@ async function countMessageObjectTokens(obj: Record<string, unknown>): Promise<n
 //#region 公开 API
 
 /**
- * 计算文本 token 长度(真实 BPE,o200k_base)。
+ * 计算文本 token 长度（轻量级字符估算）。
  */
 export function countTextTokens(text: string): number {
 	return textTokenLength(text);

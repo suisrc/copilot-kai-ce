@@ -227,7 +227,5 @@
     "@vscode/vsce": "^3.9.2",
     "typescript": "^5.4.0"
   },
-  "dependencies": {
-    "gpt-tokenizer": "^3.4.0"
-  }
+  "dependencies": {}
 }

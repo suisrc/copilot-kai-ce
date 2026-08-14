@@ -558,9 +558,10 @@ export class KaiCustomEndpointProvider implements vscode.LanguageModelChatProvid
 									type: 'string',
 									title: 'Thinking Effort',
 									enum: model.supportsReasoningEffort,
-									...(model.defaultReasoningEffort && model.supportsReasoningEffort.includes(model.defaultReasoningEffort)
-										? { default: model.defaultReasoningEffort }
-										: {}),
+									// 默认值：优先用配置的 defaultReasoningEffort，否则取列表中第一个非 "none" 的值
+									default: (model.defaultReasoningEffort && model.supportsReasoningEffort.includes(model.defaultReasoningEffort))
+										? model.defaultReasoningEffort
+										: model.supportsReasoningEffort.find(e => e !== 'none') ?? model.supportsReasoningEffort[0],
 									group: 'navigation',
 								},
 							},
@@ -700,14 +701,14 @@ export class KaiCustomEndpointProvider implements vscode.LanguageModelChatProvid
 		const modelConfig = (options as { modelConfiguration?: { reasoningEffort?: string } }).modelConfiguration;
 		const pickerEffort = typeof modelConfig?.reasoningEffort === 'string' ? modelConfig.reasoningEffort : undefined;
 
+		// 回退顺序：picker 选择值 → 配置的 defaultReasoningEffort → 列表中第一个非 "none" 的值
+		const fallbackDefault = model.defaultReasoningEffort && supports.includes(model.defaultReasoningEffort)
+			? model.defaultReasoningEffort
+			: supports.find(e => e !== 'none') ?? undefined;
+
 		const effort = (pickerEffort && supports.includes(pickerEffort))
 			? pickerEffort
-			: (model.defaultReasoningEffort && supports.includes(model.defaultReasoningEffort)
-				? model.defaultReasoningEffort
-				: undefined);
-		if (!effort) {
-			return;
-		}
+			: fallbackDefault;
 
 		const format = model.reasoningEffortFormat ?? model.apiType;
 		const bodyObj = body as Record<string, unknown>;
@@ -721,6 +722,11 @@ export class KaiCustomEndpointProvider implements vscode.LanguageModelChatProvid
 		if (bodyObj.output_config) {
 			const { effort: _drop, ...rest } = bodyObj.output_config as Record<string, unknown>;
 			bodyObj.output_config = Object.keys(rest).length > 0 ? rest : undefined;
+		}
+
+		// "none" 表示关闭思考：清理所有 reasoning 相关字段后直接返回，不写入请求体
+		if (!effort || effort === 'none') {
+			return;
 		}
 
 		if (format === 'responses') {
@@ -1016,7 +1022,7 @@ export class KaiCustomEndpointProvider implements vscode.LanguageModelChatProvid
 		_token: vscode.CancellationToken,
 	): Promise<number> {
 		// 参考 customendpoint 的 CopilotLanguageModelWrapper.provideTokenCount：
-		// - 纯字符串：直接真实 BPE 编码计数
+		// - 纯字符串：直接字符估算计数
 		// - 消息：转换为 OpenAI 风格消息对象后 countMessageTokens(含 BaseTokensPerMessage)
 		if (typeof text === 'string') {
 			return countTextTokens(text);
