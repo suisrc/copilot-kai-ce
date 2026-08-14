@@ -54,8 +54,10 @@ extensionsCG/copilot-kai-ce/
 │   │                   #   含 applyReasoningEffort(推理努力级别写入请求体)
 │   │                   #   含 System 消息处理、reasoning_content 输出
 │   ├── client.ts       # 网关客户端:URL 解析 + 三种协议请求构造 + 通用 SSE 解析
+│   │                   #   + FIM 补全请求构造(buildKaiCompletionRequest/streamKaiCompletions)
 │   ├── tokenizer.ts    # token 计数:BPETokenizer 移植(o200k_base BPE)+ 图片/文档成本
-│   ├── config.ts       # 读取 kaicustomendpoint.models(vendor 过滤)
+│   ├── config.ts       # 读取 kaicustomendpoint.models(vendor 过滤)+ inlineCompletion
+│   ├── completions.ts  # KaiInlineCompletionProvider:内联补全(FIM prompt+suffix,独立于 Copilot)
 │   └── types.ts        # 类型定义 + vendor 常量
 ├── out/                # 编译输出(tsc → JS)
 └── dist/               # 打包产物(vsix)
@@ -82,6 +84,9 @@ extensionsCG/copilot-kai-ce/
 | `reasoningEffortFormat` / `defaultReasoningEffort` / `supportsReasoningEffort` | `provider.ts` `applyReasoningEffort` + `package.json` schema + `types.ts` | ✅ 已实现（`defaultReasoningEffort` 直接写入请求体，不依赖 proposed API；picker UI 依赖 proposed API `chatProvider`，未声明） |
 | `editTools` / `zeroDataRetentionEnabled` | `provider.ts` + `package.json` schema + `types.ts` | ✅ 已实现（proposed API `chatProvider`，vsix 分发时生效；发布 Marketplace 时需移除 `enabledApiProposals`） |
 | Thinking Effort picker UI（`configurationSchema`） | `provider.ts` `provideLanguageModelChatInformation` | ✅ 已实现（proposed API `chatProvider`，vsix 分发时生效） |
+| `fetch.ts` — `CompletionRequest`（FIM prompt+suffix 请求） | `client.ts` `buildKaiCompletionRequest` + `completions.ts` | ✅ 已实现（补全固定走 FIM `/completions`，`url` 为全地址不做路径拼接） |
+| `componentsCompletionsPromptFactory.tsx` — prefix/suffix 上下文组装 | `completions.ts` `extractContext`（token 预算按完整行裁剪） | ✅ 已实现（简化：无相似文件/诊断等上下文，仅前缀后缀） |
+| `vscodeInlineCompletionItemProvider.ts` — `provideInlineCompletionItems` | `completions.ts` `KaiInlineCompletionProvider` | ✅ 已实现（stable API 一次性返回；渐进式渲染为 Copilot 私有通道，不支持） |
 
 ## 五、三种协议支持状态
 
@@ -138,7 +143,7 @@ extensionsCG/copilot-kai-ce/
 - [x] **P0 token 计数重写**:新建 `src/tokenizer.ts`,整体参考 `BPETokenizer`(o200k_base BPE + LRU 缓存 + countMessageTokens + countToolTokens + 图片/文档成本),替换 `client.ts` 中的 `approximateTokenCount`
 - [x] P1 更新 README 的「已知限制」(去掉"Token 计数为近似值"→ 改为真实 BPE)
 - [x] P2 配置 schema 补全 customendpoint 剩余字段（`editTools`、`zeroDataRetentionEnabled`、`supportsReasoningEffort`、`reasoningEffortFormat`、`defaultReasoningEffort`）——全部已实现：声明 `enabledApiProposals: ["chatProvider"]`，`editTools` 传递到 capabilities、`zeroDataRetentionEnabled` 控制 Responses API `store`、`configurationSchema` 渲染 Thinking Effort picker、`applyReasoningEffort` 优先读取 picker 选择回退 `defaultReasoningEffort`
-- [ ] P3 内联提示词(inline completion)——另行规划
+- [x] P3 内联提示词(inline completion)——已实现：`completions.ts` `KaiInlineCompletionProvider`，FIM prompt+suffix 请求，独立于 Copilot 登录/订阅。`kaicustomendpoint.inlineCompletion` 配置（`pattern` + 可选 `language`/`prompt` + `model`），`url` 为全地址不做路径拼接。stable API 一次性返回（渐进式渲染为 Copilot 私有通道，不支持）
 - [ ] P4 实际端点联调测试(本地 Ollama / vLLM 网关)
 
 ## 九、proposed API 使用说明

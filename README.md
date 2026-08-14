@@ -132,9 +132,41 @@ Web 版本的 VS Code 将 `chatLanguageModels.json` 保存在浏览器的 Indexe
 - ✅ `chat-completions` API：文本、工具调用（tool calls）、图片输入（vision）、流式输出
 - ✅ `responses` API：文本、工具调用（function call）、图片输入（vision）、流式输出
 - ✅ `messages` API（Anthropic 兼容）：文本、工具调用（tool use）、图片输入（vision）、流式输出
-- ⏳ 内联提示词（inline completion）：另行规划
+- ✅ 内联补全（inline completion / ghost text）：FIM（prompt+suffix）格式，独立于 Copilot 登录/订阅
+
+## 内联补全配置
+
+通过 `kaicustomendpoint.inlineCompletion` 配置补全（可选，未配置则不注册补全 provider）：
+
+```jsonc
+{
+  "kaicustomendpoint.inlineCompletion": {
+    "pattern": "**",
+    // 可选：限定语言（字符串或数组）
+    // "language": ["typescript", "javascript"],
+    // 可选：提示词模板，支持 {prefix} / {suffix} / {languageId}；缺省为标准 FIM
+    // "prompt": "/* {languageId} */\n{prefix}",
+    "model": {
+      "apiKey": "${input:chat.lm.secret.deepseek}",
+      "id": "deepseek-v4-flash",
+      "name": "fim-deepseek-v4",
+      "url": "https://api.deepseek.com/beta/completions",
+      "defaultReasoningEffort": ""
+    }
+  }
+}
+```
+
+补全请求使用 FIM（Fill-in-the-Middle）格式，body 为 `{ model, prompt, suffix, max_tokens, stream }`：
+
+- `prompt` 为光标前的文本（前缀），`suffix` 为光标后的文本（后缀）
+- `url` 必须是**全地址**（如 `https://api.deepseek.com/beta/completions`），不做路径拼接
+- 自定义 `prompt` 模板时，渲染结果写入 `prompt` 字段，`suffix` 字段置空
+- 前缀默认保留 2048 token、后缀 512 token（按完整行裁剪，保持代码结构）
+- 请求失败静默（不弹错误提示），与 Copilot 无订阅时行为一致
 
 ## 已知限制
 
 - API Key 明文存储（设计使然，解决 Web 刷新丢失问题）；可通过 `kaicustomendpoint.secrets` + 引用语法分离密钥
 - `editTools` / Thinking Effort picker 依赖 proposed API（`chatProvider`），需通过 vsix 安装生效；发布到 Marketplace 时需移除 `enabledApiProposals`
+- 内联补全为一次性返回完整补全（stable API 不支持 AsyncIterable 渐进式渲染，那是 Copilot 内部私有通道）

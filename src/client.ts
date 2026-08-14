@@ -302,3 +302,57 @@ export function buildMessagesRequest(modelId: string, messages: AnthropicMessage
 }
 
 //#endregion
+
+//#region FIM（Fill-in-the-Middle）补全请求
+
+/**
+ * FIM 补全请求体（参考 Copilot 的 `CompletionRequest` 与 OpenAI `/completions`）。
+ *
+ * 与 chat-completions 不同，FIM 用 `prompt`（光标前文本）+ `suffix`（光标后文本）
+ * 两个字段，模型填充中间缺失部分。DeepSeek `https://api.deepseek.com/beta/completions`
+ * 即为该端点。
+ */
+export interface KaiCompletionRequest {
+	model: string;
+	/** 光标前的文本（前缀） */
+	prompt: string;
+	/** 光标后的文本（后缀） */
+	suffix: string;
+	stream: boolean;
+	max_tokens?: number;
+	[key: string]: unknown;
+}
+
+/** 构造 FIM /completions 请求体 */
+export function buildKaiCompletionRequest(modelId: string, prompt: string, suffix: string, opts: { maxOutputTokens?: number; modelOptions?: Record<string, unknown> }): KaiCompletionRequest {
+	const body: KaiCompletionRequest = {
+		model: modelId,
+		prompt,
+		suffix,
+		stream: true,
+		...(opts.maxOutputTokens ? { max_tokens: opts.maxOutputTokens } : {}),
+		...opts.modelOptions,
+	};
+	return body;
+}
+
+/** FIM /completions 流式数据块（OpenAI completions 兼容格式） */
+export interface KaiCompletionChunk {
+	id?: string;
+	choices?: Array<{
+		/** 增量文本 */
+		text?: string;
+		index?: number;
+		finish_reason?: string | null;
+	}>;
+	error?: { message?: string; type?: string };
+}
+
+/** 仅解析 FIM /completions 数据块（复用通用 SSE 解析器） */
+export async function* streamKaiCompletions(response: Response): AsyncGenerator<KaiCompletionChunk> {
+	for await (const sseEvent of streamSSE(response)) {
+		yield sseEvent.data as KaiCompletionChunk;
+	}
+}
+
+//#endregion

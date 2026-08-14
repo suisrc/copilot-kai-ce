@@ -30,6 +30,7 @@ export const CONFIG_VENDOR = 'customendpoint';
 export const CONFIG_SECTION = 'kaicustomendpoint';
 export const CONFIG_MODELS_KEY = 'kaicustomendpoint.models';
 export const CONFIG_SECRETS_KEY = 'kaicustomendpoint.secrets';
+export const CONFIG_INLINE_COMPLETION_KEY = 'kaicustomendpoint.inlineCompletion';
 
 /** 单个模型配置，与 customendpoint 的模型配置字段保持一致 */
 export interface KaiModelConfig {
@@ -85,4 +86,42 @@ export interface KaiProviderGroup {
 	readonly url?: string;
 	/** 该分组下的模型列表 */
 	readonly models?: KaiModelConfig[];
+}
+
+/**
+ * 内联补全（inline completion）使用的模型配置。
+ * 与 chat 模型分组解耦，可独立指定补全专用模型（通常更快/更便宜）。
+ */
+export interface KaiInlineCompletionModelConfig {
+	/** 模型 ID，请求时作为 FIM `model` 字段发送 */
+	readonly id: string;
+	/** 显示名称，缺省时使用 id */
+	readonly name?: string;
+	/** 完整端点 URL（必须为全地址，如 `https://api.deepseek.com/beta/completions`，不做路径拼接） */
+	readonly url?: string;
+	/** API Key，支持 `${input:chat.lm.secret.<id>}` 引用（与 models 一致） */
+	readonly apiKey?: string;
+	/** 最大输出 token 数 */
+	readonly maxOutputTokens?: number;
+	/** 默认推理努力级别（透传给 FIM 请求体，模型支持时生效） */
+	readonly defaultReasoningEffort?: string;
+	/** 附加请求头，支持 `${apiKey}` 插值 */
+	readonly requestHeaders?: Record<string, string>;
+	/** 透传给 FIM 请求体的模型参数（如 temperature 等） */
+	readonly modelOptions?: Record<string, unknown>;
+}
+
+/**
+ * 内联补全配置（`kaicustomendpoint.inlineCompletion`）。
+ * 未配置（或 model 缺失）时，Kai CE 不注册补全 provider。
+ */
+export interface KaiInlineCompletionConfig {
+	/** 文档匹配 glob（DocumentSelector 的 pattern），如 `"**"` */
+	readonly pattern?: string;
+	/** 限定语言 ID（字符串或数组），如 `"typescript"` 或 `["typescript", "javascript"]` */
+	readonly language?: string | string[];
+	/** 补全提示词模板，支持 `{prefix}` / `{suffix}` / `{languageId}` 占位符；缺省为 `"{prefix}"`（标准 FIM） */
+	readonly prompt?: string;
+	/** 补全模型配置 */
+	readonly model?: KaiInlineCompletionModelConfig;
 }

@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as vscode from 'vscode';
-import { CONFIG_MODELS_KEY, CONFIG_SECRETS_KEY, CONFIG_SECTION, CONFIG_VENDOR, KaiProviderGroup, PROVIDER_VENDOR } from './types';
+import { CONFIG_INLINE_COMPLETION_KEY, CONFIG_MODELS_KEY, CONFIG_SECRETS_KEY, CONFIG_SECTION, CONFIG_VENDOR, KaiInlineCompletionConfig, KaiProviderGroup, PROVIDER_VENDOR } from './types';
 
 /** ${input:chat.lm.secret.xxx} 引用前缀 */
 const SECRET_REF_PREFIX = '${input:chat.lm.secret.';
@@ -63,4 +63,20 @@ export function findModelConfig(groups: KaiProviderGroup[], modelId: string): { 
 		}
 	}
 	return undefined;
+}
+
+/**
+ * 读取 `kaicustomendpoint.inlineCompletion` 补全配置。
+ * 未配置（或 model 缺失）时返回 undefined，调用方据此决定是否注册补全 provider。
+ */
+export function getInlineCompletionConfig(): KaiInlineCompletionConfig | undefined {
+	const config = vscode.workspace.getConfiguration().get<KaiInlineCompletionConfig | undefined>(CONFIG_INLINE_COMPLETION_KEY);
+	if (!config || typeof config !== 'object') {
+		return undefined;
+	}
+	// 补全必须有模型配置，否则无意义
+	if (!config.model || typeof config.model !== 'object' || !config.model.id) {
+		return undefined;
+	}
+	return config;
 }

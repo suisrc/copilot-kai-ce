@@ -213,6 +213,80 @@
           "additionalProperties": {
             "type": "string"
           }
+        },
+        "kaicustomendpoint.inlineCompletion": {
+          "type": "object",
+          "markdownDescription": "内联补全（ghost text）配置。配置后 Kai CE 会注册独立的补全 provider（与 GitHub Copilot 解耦，不依赖登录/订阅）。补全请求使用 FIM（Fill-in-the-Middle）格式，直接调用模型配置中的全地址端点。**必须配置 `model` 才生效。**",
+          "default": {},
+          "properties": {
+            "pattern": {
+              "type": "string",
+              "default": "**",
+              "description": "文档匹配 glob（DocumentSelector 的 pattern），默认匹配所有文件。"
+            },
+            "language": {
+              "type": [
+                "string",
+                "array"
+              ],
+              "items": {
+                "type": "string"
+              },
+              "description": "限定补全语言 ID（如 typescript），可传字符串或字符串数组。缺省时对所有语言生效。"
+            },
+            "prompt": {
+              "type": "string",
+              "markdownDescription": "补全提示词模板。缺省时使用标准 FIM（`prompt`=光标前缀、`suffix`=光标后缀）。自定义时支持 `{prefix}`、`{suffix}`、`{languageId}` 占位符，渲染结果写入请求的 `prompt` 字段，`suffix` 字段置空。"
+            },
+            "model": {
+              "type": "object",
+              "required": [
+                "id"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "补全模型 ID，请求时作为 FIM model 字段发送。"
+                },
+                "name": {
+                  "type": "string",
+                  "description": "显示名称，缺省时使用 id。"
+                },
+                "url": {
+                  "type": "string",
+                  "pattern": "^https?://.+",
+                  "patternErrorMessage": "URL 必须以 http:// 或 https:// 开头",
+                  "markdownDescription": "补全端点全地址（**必须完整**，如 `https://api.deepseek.com/beta/completions`，不做路径拼接）。"
+                },
+                "apiKey": {
+                  "type": "string",
+                  "default": "",
+                  "markdownDescription": "API Key，支持明文或 `${input:chat.lm.secret.<id>}` 引用。留空则请求不带 Authorization 头。"
+                },
+                "maxOutputTokens": {
+                  "type": "number",
+                  "default": 1024,
+                  "description": "补全最大输出 token 数。"
+                },
+                "defaultReasoningEffort": {
+                  "type": "string",
+                  "description": "默认推理努力级别，非空时透传为请求体的 reasoning_effort 字段。"
+                },
+                "requestHeaders": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "description": "附加请求头，可覆盖默认 Bearer 鉴权头，支持 ${apiKey} 插值。"
+                },
+                "modelOptions": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "description": "透传给 FIM 请求体的模型参数（如 temperature 等）。"
+                }
+              }
+            }
+          }
         }
       }
     }

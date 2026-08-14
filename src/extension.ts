@@ -5,7 +5,9 @@
 
 import * as vscode from 'vscode';
 import { KaiCustomEndpointProvider } from './provider';
-import { CONFIG_MODELS_KEY, PROVIDER_VENDOR } from './types';
+import { KaiInlineCompletionProvider } from './completions';
+import { getInlineCompletionConfig } from './config';
+import { CONFIG_INLINE_COMPLETION_KEY, CONFIG_MODELS_KEY, PROVIDER_VENDOR } from './types';
 
 export function activate(context: vscode.ExtensionContext): void {
 	const provider = new KaiCustomEndpointProvider();
@@ -18,6 +20,51 @@ export function activate(context: vscode.ExtensionContext): void {
 				provider.notifyConfigurationChanged();
 			}
 		}),
+	);
+
+	// 内联补全：配置了 kaicustomendpoint.inlineCompletion 且含 model 时才注册
+	registerInlineCompletion(context);
+}
+
+function registerInlineCompletion(context: vscode.ExtensionContext): void {
+	let disposable: vscode.Disposable | undefined;
+
+	const apply = () => {
+		disposable?.dispose();
+		disposable = undefined;
+
+		const config = getInlineCompletionConfig();
+		if (!config) {
+			return;
+		}
+
+		// 构造 DocumentSelector：pattern（glob）+ 可选 language 过滤。
+		// DocumentFilter.language 为单字符串，多语言时展开为多个 filter。
+		const pattern = config.pattern ?? '**';
+		let selector: vscode.DocumentSelector;
+		if (Array.isArray(config.language)) {
+			selector = config.language.map(lang => ({ pattern, language: lang }));
+		} else if (config.language) {
+			selector = { pattern, language: config.language };
+		} else {
+			selector = { pattern };
+		}
+
+		disposable = vscode.languages.registerInlineCompletionItemProvider(
+			selector,
+			new KaiInlineCompletionProvider(config),
+		);
+	};
+
+	// 初次注册 + 配置变更时动态重注册
+	apply();
+	context.subscriptions.push(
+		vscode.workspace.onDidChangeConfiguration(e => {
+			if (e.affectsConfiguration(CONFIG_INLINE_COMPLETION_KEY)) {
+				apply();
+			}
+		}),
+		{ dispose: () => disposable?.dispose() },
 	);
 }
 
