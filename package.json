@@ -1,16 +1,18 @@
 {
-  "name": "kai-customendpoint",
-  "displayName": "Kai Custom Endpoint",
+  "name": "copilot-kai-ce",
+  "displayName": "Kai CE",
   "description": "基于 customendpoint 模型供应商重构的对话模型供应商。模型配置与 API Key 明文保存在 settings.json（kaicustomendpoint.models）中，避免 Web 版本 chatLanguageModels.json 仅存于浏览器 IndexedDB 导致刷新后丢失的问题。",
   "version": "0.0.1",
-  "publisher": "kai",
+  "publisher": "suisrc",
   "license": "MIT",
+  "icon": "logo.png",
+  "repository": "https://github.com/suisrc/copilot-kai-ce",
   "engines": {
     "vscode": "^1.98.0"
   },
   "categories": [
     "AI",
-    "Other"
+    "Chat"
   ],
   "main": "./out/extension.js",
   "enabledApiProposals": [
@@ -23,11 +25,11 @@
     "languageModelChatProviders": [
       {
         "vendor": "kaicustomendpoint",
-        "displayName": "Kai Custom Endpoint"
+        "displayName": "Kai CE"
       }
     ],
     "configuration": {
-      "title": "Kai Custom Endpoint",
+      "title": "Kai CE",
       "properties": {
         "kaicustomendpoint.models": {
           "type": "array",
@@ -53,7 +55,7 @@
               "apiKey": {
                 "type": "string",
                 "default": "",
-                "markdownDescription": "API Key（**明文存储**）。留空则请求时不带 Authorization 头（适用于本地无鉴权网关）。"
+                "markdownDescription": "API Key。支持两种写法：\n\n- **明文**：直接填写，如 `\"sk-xxxx\"`\n- **引用**：`\"${input:chat.lm.secret.<id>}\"`，从 `kaicustomendpoint.secrets` 配置中查找对应 id 的值\n\n留空则请求时不带 Authorization 头（适用于本地无鉴权网关）。"
               },
               "apiType": {
                 "type": "string",
@@ -93,7 +95,7 @@
                   "properties": {
                     "id": {
                       "type": "string",
-                      "description": "模型 ID，请求时作为 OpenAI `model` 字段发送"
+                      "description": "模型 ID，请求时作为 OpenAI model 字段发送"
                     },
                     "name": {
                       "type": "string",
@@ -150,7 +152,7 @@
                     },
                     "editTools": {
                       "type": "array",
-                      "markdownDescription": "模型支持的编辑工具列表。未配置时编辑器会自动尝试多种编辑工具并选择最佳者。\n\n- `find-replace`：在文档中查找并替换文本\n- `multi-find-replace`：在文档中查找并替换多段文本\n- `apply-patch`：部分 OpenAI 模型使用的面向文件的 diff 格式\n- `code-rewrite`：通用但较慢的编辑工具，允许模型重写代码片段\n\n**注意：此字段依赖 proposed API（`chatProvider`），当前扩展未声明该 API，配置后暂不生效。",
+                      "markdownDescription": "模型支持的编辑工具列表（proposed API chatProvider）。未配置时编辑器会自动尝试多种编辑工具并选择最佳者。\n\n- `find-replace`：在文档中查找并替换文本\n- `multi-find-replace`：在文档中查找并替换多段文本\n- `apply-patch`：部分 OpenAI 模型使用的面向文件的 diff 格式\n- `code-rewrite`：通用但较慢的编辑工具，允许模型重写代码片段",
                       "items": {
                         "type": "string",
                         "enum": [
@@ -164,18 +166,18 @@
                     "zeroDataRetentionEnabled": {
                       "type": "boolean",
                       "default": false,
-                      "markdownDescription": "是否为此端点启用零数据保留（ZDR）。启用后 Responses API 请求中不会发送 `previous_response_id`。"
+                      "markdownDescription": "是否为此端点启用零数据保留（ZDR）。启用后 Responses API 请求中显式设 store: false。"
                     },
                     "supportsReasoningEffort": {
                       "type": "array",
-                      "markdownDescription": "模型接受的推理努力级别（如 `[\\\"low\\\", \\\"medium\\\", \\\"high\\\"]`）。主流 OpenAI 兼容服务器支持的级别有 `minimal`、`low`、`medium`、`high`。\n\n**注意：模型选择器中的「Thinking Effort」picker 依赖 proposed API（`chatProvider`），当前扩展未声明。但配合 `defaultReasoningEffort` 字段可设置默认值，请求时会直接写入请求体，不依赖 picker。",
+                      "markdownDescription": "模型接受的推理努力级别（如 [\"low\", \"medium\", \"high\"]）。配置后模型选择器中会出现「Thinking Effort」picker（proposed API chatProvider）。",
                       "items": {
                         "type": "string"
                       }
                     },
                     "defaultReasoningEffort": {
                       "type": "string",
-                      "markdownDescription": "默认推理努力级别（如 `medium`）。设置后请求时直接写入请求体，不依赖 proposed API。须在 `supportsReasoningEffort` 列表中。"
+                      "markdownDescription": "默认推理努力级别（如 medium）。picker 未选择时使用此值。须在 supportsReasoningEffort 列表中。"
                     },
                     "reasoningEffortFormat": {
                       "type": "string",
@@ -184,14 +186,14 @@
                         "responses",
                         "messages"
                       ],
-                      "markdownDescription": "将推理努力级别转发给模型时使用的请求体格式。`chat-completions` 发送顶层 `reasoning_effort` 字符串；`responses` 发送嵌套的 `reasoning.effort` 对象；`messages` 发送 Anthropic Messages 的 `output_config.effort` 字段。未设置时根据模型 `apiType` 推断：`responses` → 嵌套，`messages` → `output_config.effort`，`chat-completions` → 顶层。"
+                      "markdownDescription": "将推理努力级别转发给模型时使用的请求体格式。chat-completions 发送顶层 reasoning_effort 字符串；responses 发送嵌套的 reasoning.effort 对象；messages 发送 Anthropic Messages 的 output_config.effort 字段。未设置时根据模型 apiType 推断。"
                     },
                     "requestHeaders": {
                       "type": "object",
                       "additionalProperties": {
                         "type": "string"
                       },
-                      "description": "附加请求头。`authorization` 与 `api-key` 可覆盖默认的 Bearer 鉴权头（如自定义网关鉴权方式）"
+                      "description": "附加请求头。authorization 与 api-key 可覆盖默认的 Bearer 鉴权头（如自定义网关鉴权方式）"
                     },
                     "modelOptions": {
                       "type": "object",
@@ -202,6 +204,14 @@
                 }
               }
             }
+          }
+        },
+        "kaicustomendpoint.secrets": {
+          "type": "object",
+          "markdownDescription": "API Key 密钥映射表，配合 kaicustomendpoint.models 中的 apiKey 引用语法使用。\n\n将密钥与模型配置分离存储，便于管理和同步。",
+          "default": {},
+          "additionalProperties": {
+            "type": "string"
           }
         }
       }

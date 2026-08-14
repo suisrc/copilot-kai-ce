@@ -1,4 +1,4 @@
-# Kai Custom Endpoint — 开发路线图
+# Kai CE — 开发路线图
 
 > 本文件是开发的一手参考。修改代码前先读本文件,避免重复分析。
 > 核心原则:**整体参考 VS Code Copilot 扩展的 `customendpoint` 实现**(`extensions/copilot/src/extension/byok/vscode-node/customEndpointProvider.ts` 及下游链路),不自己发明协议处理逻辑。只在「配置存储(settings.json 明文)」与「不依赖 copilot 私有服务」两点上偏离。
@@ -11,7 +11,7 @@
 > 当前整个目录是 VS Code 软件的仓库镜像,仅供开发参考,**不要进行任何修改**。
 >
 > 具体约束:
-> 1. 只修改 `extensionsCG/kai-customendpoint/` 下的文件
+> 1. 只修改 `extensionsCG/copilot-kai-ce/` 下的文件
 > 2. `extensions/copilot/`、`src/vs/` 等仓库代码为只读参考,禁止编辑
 > 3. 修改代码后需更新本路线图(`roadmap.md`),便于后续开发无需重新分析
 
@@ -38,7 +38,7 @@
 ## 三、文件结构
 
 ```
-extensionsCG/kai-customendpoint/
+extensionsCG/copilot-kai-ce/
 ├── package.json        # 扩展清单:vendor 贡献点 + 配置 schema + enabledApiProposals
 ├── tsconfig.json
 ├── .vscodeignore
@@ -75,7 +75,7 @@ extensionsCG/kai-customendpoint/
 | `responsesApi.ts` — `createResponsesRequestBody` / 流处理 | `client.ts` `buildResponsesRequest` + `provider.ts` `processResponsesStream` | ✅ 已实现 |
 | `abstractLanguageModelChatProvider.ts` — `AbstractOpenAICompatibleLMProvider` | `provider.ts`(合并,无继承) | ✅ 已实现 |
 | `tokenizer.ts` — `BPETokenizer` / `countMessageTokens` / `calculateImageTokenCost` | `tokenizer.ts` | ✅ 已实现(gpt-tokenizer o200k_base) |
-| `byokStorageService.ts` — secrets 存储 | 直接用 settings.json(明文) | ✅ 偏离(设计使然) |
+| `byokStorageService.ts` — secrets 存储 | 直接用 settings.json(明文) | ✅ 重新设计 |
 | `byokProvider.ts` — `resolveModelInfo` / `byokKnownModelToAPIInfo` | `provider.ts` `provideLanguageModelChatInformation` | ✅ 已实现 |
 | System 消息处理(chat-completions/responses) | `provider.ts` `toOpenAIMessages` / `toResponsesInput` | ✅ 已实现 |
 | `reasoning_content` 流式输出 | `provider.ts` `processChatCompletionsStream` | ✅ 已实现 |

@@ -1,5 +1,5 @@
 # -----------------------------------------------------------------------------
-# Kai Custom Endpoint — 构建 & 打包 Makefile
+# Kai CE — 构建 & 打包 Makefile
 #
 # 常用命令:
 #   make            # 等价于 make build(安装依赖 + 编译)
@@ -13,7 +13,7 @@
 # -----------------------------------------------------------------------------
 
 # 包名(来自 package.json 的 name)
-EXT_NAME   := kai-customendpoint
+EXT_NAME   := copilot-kai-ce
 # VSIX 输出目录
 DIST_DIR   := dist
 # 打包产物:name-version.vsix(version 从 package.json 读取)

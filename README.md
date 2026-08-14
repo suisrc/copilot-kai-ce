@@ -1,4 +1,4 @@
-# Kai Custom Endpoint
+# Kai CE
 
 基于 VS Code `customendpoint` 模型供应商重构的对话模型供应商扩展。
 
@@ -65,10 +65,35 @@ npm run compile
 |---|---|
 | `vendor` | 固定为 `customendpoint`（致敬官方命名；本扩展注册 ID 为 `kaicustomendpoint`） |
 | `name` | 分组名称，模型选择器中用于区分同供应商的多个分组 |
-| `apiKey` | 明文 API Key；留空则不带 `Authorization` 头 |
+| `apiKey` | API Key，支持两种写法：明文（如 `"sk-xxxx"`）或引用（`"${input:chat.lm.secret.<id>}"`，从 `kaicustomendpoint.secrets` 查找）；留空则不带 `Authorization` 头 |
 | `apiType` | `chat-completions`（默认）/ `responses` / `messages`（均完整支持） |
 | `url` | Base URL，支持显式 API 路径；自动拼接 `/v1` + API 路径 |
 | `models[]` | 模型列表，字段与 customendpoint 一致（`id` / `name` / `url` / `apiType` / `maxInputTokens` / `maxOutputTokens` / `contextWindow` / `toolCalling` / `vision` / `thinking` / `streaming` / `requestHeaders` / `modelOptions`） |
+
+### 密钥分离存储
+
+如果不想将 API Key 直接写在模型配置中，可以使用引用语法将密钥分离到 `kaicustomendpoint.secrets`：
+
+```jsonc
+{
+  // 密钥映射表
+  "kaicustomendpoint.secrets": {
+    "5c3fc3d9": "sk-xxxxxxxxxxxx"
+  },
+  // 模型配置中引用
+  "kaicustomendpoint.models": [
+    {
+      "vendor": "customendpoint",
+      "name": "my-gateway",
+      "apiKey": "${input:chat.lm.secret.5c3fc3d9}",
+      "url": "http://localhost:8000/v1",
+      "models": [/* ... */]
+    }
+  ]
+}
+```
+
+引用语法 `${input:chat.lm.secret.<id>}` 与 VS Code Copilot 的 `chatLanguageModels.json` 兼容，迁移时无需修改 apiKey 引用。
 
 ### 自定义请求头
 
@@ -92,6 +117,6 @@ npm run compile
 
 ## 已知限制
 
-- API Key 明文存储（设计使然，解决 Web 刷新丢失问题）
+- API Key 明文存储（设计使然，解决 Web 刷新丢失问题）；可通过 `kaicustomendpoint.secrets` + 引用语法分离密钥
 - Token 计数使用真实 BPE 编码（o200k_base，`gpt-tokenizer`），与官方 customendpoint 一致
-- 不支持 `LanguageModelThinkingPart`（proposed API，后续可选启用）
+- `editTools` / Thinking Effort picker 依赖 proposed API（`chatProvider`），需通过 vsix 安装生效；发布到 Marketplace 时需移除 `enabledApiProposals`

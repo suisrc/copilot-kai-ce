@@ -29,6 +29,7 @@ export const CONFIG_VENDOR = 'customendpoint';
 /** 配置项前缀与键 */
 export const CONFIG_SECTION = 'kaicustomendpoint';
 export const CONFIG_MODELS_KEY = 'kaicustomendpoint.models';
+export const CONFIG_SECRETS_KEY = 'kaicustomendpoint.secrets';
 
 /** 单个模型配置，与 customendpoint 的模型配置字段保持一致 */
 export interface KaiModelConfig {

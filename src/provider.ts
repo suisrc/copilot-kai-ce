@@ -4,7 +4,6 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as vscode from 'vscode';
-import { getProviderGroups } from './config';
 import {
 	AnthropicContentBlock,
 	AnthropicMessage,
@@ -22,6 +21,7 @@ import {
 	streamSSE,
 } from './client';
 import { countMessageTokens, countTextTokens } from './tokenizer';
+import { getProviderGroups, resolveSecret } from './config';
 import { ApiType, KaiModelConfig, PROVIDER_VENDOR } from './types';
 
 /**
@@ -167,13 +167,68 @@ function toOpenAIMessages(messages: readonly vscode.LanguageModelChatRequestMess
 	return result;
 }
 
+/**
+ * 递归清理 JSON Schema 中的 null 值，确保 schema 符合 API 要求。
+ * 参考 copilot 的 toolSchemaNormalizer.ts 和 oai-compatible-copilot 的 jsonSchemaToGeminiSchema。
+ *
+ * 处理规则：
+ * - additionalProperties: null → true（OpenAI/DeepSeek 要求 boolean 或 object）
+ * - 其他 null 值属性 → 删除（API 不接受 null）
+ * - 递归处理 properties、items、anyOf、allOf、oneOf 等嵌套结构
+ * - 确保顶层有 type: 'object' 和 properties（参考 copilot 的 fnRules）
+ */
+function sanitizeSchema(schema: unknown): Record<string, unknown> {
+	if (!schema || typeof schema !== 'object' || Array.isArray(schema)) {
+		return { type: 'object', properties: {} };
+	}
+
+	const result = sanitizeSchemaNode(schema);
+	// 确保顶层是 object 类型且有 properties（参考 copilot 的 fnRules）
+	if (!result.type) {
+		result.type = 'object';
+	}
+	if (result.type === 'object' && !result.properties) {
+		result.properties = {};
+	}
+	return result;
+}
+
+function sanitizeSchemaNode(schema: unknown): Record<string, unknown> {
+	if (!schema || typeof schema !== 'object' || Array.isArray(schema)) {
+		return {};
+	}
+
+	const result: Record<string, unknown> = {};
+	for (const [key, value] of Object.entries(schema as Record<string, unknown>)) {
+		if (value === null) {
+			// additionalProperties: null → true（API 要求 boolean 或 object）
+			if (key === 'additionalProperties') {
+				result[key] = true;
+			}
+			// 其他 null 值属性直接跳过
+			continue;
+		}
+		if (typeof value === 'object' && !Array.isArray(value)) {
+			result[key] = sanitizeSchemaNode(value);
+		} else if (Array.isArray(value)) {
+			// 递归处理数组中的对象元素（如 anyOf、allOf、oneOf、items 数组）
+			result[key] = value.map(item =>
+				item && typeof item === 'object' && !Array.isArray(item) ? sanitizeSchemaNode(item) : item
+			);
+		} else {
+			result[key] = value;
+		}
+	}
+	return result;
+}
+
 function toOpenAITools(tools: readonly vscode.LanguageModelChatTool[]): OpenAITool[] {
 	return tools.map(t => ({
 		type: 'function' as const,
 		function: {
 			name: t.name,
 			...(t.description ? { description: t.description } : {}),
-			...(t.inputSchema ? { parameters: t.inputSchema as object } : {}),
+			parameters: sanitizeSchema(t.inputSchema),
 		},
 	}));
 }
@@ -262,7 +317,7 @@ function toResponsesTools(tools: readonly vscode.LanguageModelChatTool[]): Respo
 		type: 'function' as const,
 		name: t.name,
 		...(t.description ? { description: t.description } : {}),
-		...(t.inputSchema ? { parameters: t.inputSchema as object } : {}),
+		parameters: sanitizeSchema(t.inputSchema),
 		strict: false,
 	}));
 }
@@ -347,7 +402,7 @@ function toAnthropicTools(tools: readonly vscode.LanguageModelChatTool[]): Anthr
 	return tools.map(t => ({
 		name: t.name,
 		...(t.description ? { description: t.description } : {}),
-		...(t.inputSchema ? { input_schema: t.inputSchema as object } : {}),
+		input_schema: sanitizeSchema(t.inputSchema),
 	}));
 }
 
@@ -466,8 +521,11 @@ export class KaiCustomEndpointProvider implements vscode.LanguageModelChatProvid
 		this._onDidChangeLanguageModelChatInformation.fire();
 	}
 
-	provideLanguageModelChatInformation(): vscode.ProviderResult<KaiModelInformation[]> {
+	provideLanguageModelChatInformation(_options: vscode.PrepareLanguageModelChatModelOptions, _token: vscode.CancellationToken): vscode.ProviderResult<KaiModelInformation[]> {
+		// 仅从 settings.json（kaicustomendpoint.models）读取模型配置。
+		// 不使用 languageModelChatProviders contribution，避免 chatLanguageModels.json 重复。
 		const groups = getProviderGroups();
+
 		const infos: KaiModelInformation[] = [];
 
 		for (const group of groups) {
@@ -508,14 +566,14 @@ export class KaiCustomEndpointProvider implements vscode.LanguageModelChatProvid
 							},
 						},
 					} : {}),
-					// 展示辅助
+					// detail 显示分组名，便于区分同供应商的多个分组
 					detail: group.name,
-					tooltip: `${model.name ?? model.id} 由 Kai Custom Endpoint（分组：${group.name}）提供。`,
+					tooltip: `${model.name ?? model.id} 由 Kai CE（分组：${group.name}）提供。`,
 					// 内部字段
 					groupName: group.name,
 					endpointUrl,
 					apiType,
-					apiKey: group.apiKey,
+					apiKey: resolveSecret(group.apiKey),
 					requestHeaders: model.requestHeaders,
 					modelOptions: model.modelOptions,
 					supportsReasoningEffort: model.supportsReasoningEffort,
