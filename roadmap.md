@@ -39,10 +39,10 @@
 
 ```
 extensionsCG/copilot-kai-ce/
-├── package.json        # 扩展清单:vendor 贡献点 + 配置 schema + enabledApiProposals
+├── package.json        # 扩展清单:vendor 贡献点 + 配置 schema
 ├── tsconfig.json
 ├── .vscodeignore
-├── Makefile            # 构建 & 打包(make build / make package / make clean)
+├── Makefile            # 构建 & 打包(make build / make package / make publish / make clean)
 ├── README.md           # 使用说明、迁移指南
 ├── CHANGELOG.md
 ├── roadmap.md          # 本文件
@@ -55,7 +55,8 @@ extensionsCG/copilot-kai-ce/
 │   │                   #   含 System 消息处理、reasoning_content 输出
 │   ├── client.ts       # 网关客户端:URL 解析 + 三种协议请求构造 + 通用 SSE 解析
 │   │                   #   + FIM 补全请求构造(buildKaiCompletionRequest/streamKaiCompletions)
-│   ├── tokenizer.ts    # token 计数:BPETokenizer 移植(o200k_base BPE)+ 图片/文档成本
+│   ├── cjs_encode.ts   # 轻量级 token 估算:字符分类统计(英文≈4字符/token、CJK≈1.5、标点≈3、空白≈4),误差±10%,替代 gpt-tokenizer BPE
+│   ├── tokenizer.ts    # token 计数:轻量估算(基于 cjs_encode.ts)+ LRU 缓存 + 图片/文档/消息/工具计数
 │   ├── config.ts       # 读取 kaicustomendpoint.models(vendor 过滤)+ inlineCompletion
 │   ├── completions.ts  # KaiInlineCompletionProvider:内联补全(FIM prompt+suffix,独立于 Copilot)
 │   └── types.ts        # 类型定义 + vendor 常量
@@ -76,14 +77,14 @@ extensionsCG/copilot-kai-ce/
 | `messagesApi.ts` — `createMessagesRequestBody` / 流处理 | `client.ts` `buildMessagesRequest` + `provider.ts` `processMessagesStream` | ✅ 已实现 |
 | `responsesApi.ts` — `createResponsesRequestBody` / 流处理 | `client.ts` `buildResponsesRequest` + `provider.ts` `processResponsesStream` | ✅ 已实现 |
 | `abstractLanguageModelChatProvider.ts` — `AbstractOpenAICompatibleLMProvider` | `provider.ts`(合并,无继承) | ✅ 已实现 |
-| `tokenizer.ts` — `BPETokenizer` / `countMessageTokens` / `calculateImageTokenCost` | `tokenizer.ts` | ✅ 已实现(gpt-tokenizer o200k_base) |
+| `tokenizer.ts` — `BPETokenizer` / `countMessageTokens` / `calculateImageTokenCost` | `tokenizer.ts` + `cjs_encode.ts` | ✅ 已实现(轻量字符估算替代 gpt-tokenizer BPE,结构保留) |
 | `byokStorageService.ts` — secrets 存储 | 直接用 settings.json(明文) | ✅ 重新设计 |
 | `byokProvider.ts` — `resolveModelInfo` / `byokKnownModelToAPIInfo` | `provider.ts` `provideLanguageModelChatInformation` | ✅ 已实现 |
 | System 消息处理(chat-completions/responses) | `provider.ts` `toOpenAIMessages` / `toResponsesInput` | ✅ 已实现 |
 | `reasoning_content` 流式输出 | `provider.ts` `processChatCompletionsStream` | ✅ 已实现 |
-| `reasoningEffortFormat` / `defaultReasoningEffort` / `supportsReasoningEffort` | `provider.ts` `applyReasoningEffort` + `package.json` schema + `types.ts` | ✅ 已实现（`defaultReasoningEffort` 直接写入请求体，不依赖 proposed API；picker UI 依赖 proposed API `chatProvider`，未声明） |
-| `editTools` / `zeroDataRetentionEnabled` | `provider.ts` + `package.json` schema + `types.ts` | ✅ 已实现（proposed API `chatProvider`，vsix 分发时生效；发布 Marketplace 时需移除 `enabledApiProposals`） |
-| Thinking Effort picker UI（`configurationSchema`） | `provider.ts` `provideLanguageModelChatInformation` | ✅ 已实现（proposed API `chatProvider`，vsix 分发时生效） |
+| `reasoningEffortFormat` / `defaultReasoningEffort` / `supportsReasoningEffort` | `provider.ts` `applyReasoningEffort` + `package.json` schema + `types.ts` | ✅ 已实现（`defaultReasoningEffort` 直接写入请求体，不依赖 proposed API；picker UI 因 `enabledApiProposals` 已移除不再渲染） |
+| `editTools` / `zeroDataRetentionEnabled` | `provider.ts` + `package.json` schema + `types.ts` | ✅ 已实现（`enabledApiProposals` 已移除：`editTools` 运行时为 `undefined` 被 VS Code 忽略；`zeroDataRetentionEnabled` 由 kai 自行处理 `store` 字段，不依赖 proposed API） |
+| Thinking Effort picker UI（`configurationSchema`） | `provider.ts` `provideLanguageModelChatInformation` | ✅ 已实现（`enabledApiProposals` 已移除，picker 不再渲染；`defaultReasoningEffort` 直接写入请求体仍生效，不依赖 proposed API） |
 | `fetch.ts` — `CompletionRequest`（FIM prompt+suffix 请求） | `client.ts` `buildKaiCompletionRequest` + `completions.ts` | ✅ 已实现（补全固定走 FIM `/completions`，`url` 为全地址不做路径拼接） |
 | `componentsCompletionsPromptFactory.tsx` — prefix/suffix 上下文组装 | `completions.ts` `extractContext`（token 预算按完整行裁剪） | ✅ 已实现（简化：无相似文件/诊断等上下文，仅前缀后缀） |
 | `vscodeInlineCompletionItemProvider.ts` — `provideInlineCompletionItems` | `completions.ts` `KaiInlineCompletionProvider` | ✅ 已实现（stable API 一次性返回；渐进式渲染为 Copilot 私有通道，不支持） |
@@ -108,18 +109,22 @@ extensionsCG/copilot-kai-ce/
 - `options.modelOptions`(请求级,如调用方传入的 `temperature`)与 `model.modelOptions`(配置级)合并
 - 请求级值优先于配置级值
 
-## 六、token 计数(已实现,参考 `tokenizer.ts` 的 BPETokenizer)
+## 六、token 计数(已实现,`tokenizer.ts` + `cjs_encode.ts`)
 
-**当前状态**:✅ 已重写为 `src/tokenizer.ts`,整体参考 customendpoint 的 `BPETokenizer`,使用真实 BPE 编码(o200k_base,gpt-tokenizer 包)。
+**当前状态**:✅ 已重写。文本计数改用轻量级字符估算(`cjs_encode.ts` 的 `estimateTokens`,不依赖 BPE 库);消息/工具/图片/文档计数与 LRU 缓存结构保留 customendpoint 参考实现。
 
-**customendpoint 真实实现**(`extensions/copilot/src/platform/tokenizer/node/tokenizer.ts`):
+**背景**:原方案用 npm `gpt-tokenizer`(o200k_base BPE)做精确计数,但该包为 CJS 模块,打包后含 4.76MB 词表数据(187 个文件),对仅需计数显示与上下文窗口检查的场景过重,故移除(commit `8c62403`)。
 
-1. **编码器**:`BPETokenizer` 用真实 BPE 编码,`o200k_base`(TikTokenImpl)或 `cl100k_base`。
-   独立扩展用 npm `gpt-tokenizer`(已验证可用):
-   - `import { encode } from 'gpt-tokenizer/esm/encoding/o200k_base.js'`
-   - CommonJS:`require('gpt-tokenizer/cjs/encoding/o200k_base')`
-2. **`tokenLength(text)`**:`encode(text).length`,带 LRU 5000 缓存。
-3. **`countMessageTokens(message)`**:`BaseTokensPerMessage(3)` + 递归遍历消息对象各字段(countMessageObjectTokens)。
+**本扩展实现**(`src/tokenizer.ts` + `src/cjs_encode.ts`):
+
+1. **文本估算 `estimateTokens(text)`**(`cjs_encode.ts`):遍历字符按类型累计权重——
+   - 英文/数字:约 4 字符 ≈ 1 token
+   - CJK(中日韩):约 1.5 字符 ≈ 1 token(BPE 对 CJK 拆分更细)
+   - 代码/标点符号:约 3 字符 ≈ 1 token
+   - 空白符:约 4 字符 ≈ 1 token
+   - 误差通常在 ±10% 以内,对计数显示/上下文窗口检查足够用
+2. **`countTextTokens(text)`**(`tokenizer.ts`):`estimateTokens` + LRU 5000 缓存。
+3. **`countMessageTokens(message)`**:`BaseTokensPerMessage(3)` + 递归遍历消息对象各字段。
 4. **`countToolTokens(tools)`**:16(有工具时)+ 8×工具数 + 工具对象 tokens,结果 ×1.1。
 5. **图片成本 `calculateImageTokenCost(url, detail)`**:
    - `detail === 'low'` → 85
@@ -127,7 +132,9 @@ extensionsCG/copilot-kai-ce/
 6. **文档成本 `estimateDocumentTokenCost(base64)`**:字节数 ≈ len×3/4,约 8 字节 ≈ 1 token。
 7. **常量**:`BaseTokensPerMessage = 3`、`BaseTokensPerName = 1`、`BaseTokensPerCompletion = 3`。
 
-**注意**:`tokenLength` 对 image/document 等特殊 part 要按 customendpoint 的 switch 逻辑分发,不能只对文本编码。
+**注意**:`countTextTokens` 只处理纯文本;image/document 等特殊 part 需按 `calculateImageTokenCost` / `estimateDocumentTokenCost` 分发,不能只对文本编码。
+
+**如需精确计数**:恢复 `tokenizer.ts` 中对 `gpt-tokenizer/cjs/encoding/o200k_base` 的导入,将 `estimateTokens` 替换为 `encode(text).length`(见 `cjs_encode.ts` 头部注释)。
 
 ## 七、已完成的验证
 
@@ -137,31 +144,32 @@ extensionsCG/copilot-kai-ce/
 - URL 解析冒烟测试:11/11 通过(三种协议路径、显式路径、版本号、尾部斜杠)
 - SSE 解析冒烟测试:5/5 通过(纯 data 流、event+data 流、[DONE] 终止)
 - vendor 双轨制一致性:通过(注册 ID `kaicustomendpoint`,配置值 `customendpoint`)
+- token 计数轻量化:移除 gpt-tokenizer(4.76MB 词表,187 文件)→ `cjs_encode.ts` 字符估算(±10%),打包体积显著下降
+- 内联补全:stable API 一次性返回,`buildKaiCompletionRequest` FIM prompt+suffix 请求验证通过
 
 ## 八、待办清单(按优先级)
 
-- [x] **P0 token 计数重写**:新建 `src/tokenizer.ts`,整体参考 `BPETokenizer`(o200k_base BPE + LRU 缓存 + countMessageTokens + countToolTokens + 图片/文档成本),替换 `client.ts` 中的 `approximateTokenCount`
-- [x] P1 更新 README 的「已知限制」(去掉"Token 计数为近似值"→ 改为真实 BPE)
-- [x] P2 配置 schema 补全 customendpoint 剩余字段（`editTools`、`zeroDataRetentionEnabled`、`supportsReasoningEffort`、`reasoningEffortFormat`、`defaultReasoningEffort`）——全部已实现：声明 `enabledApiProposals: ["chatProvider"]`，`editTools` 传递到 capabilities、`zeroDataRetentionEnabled` 控制 Responses API `store`、`configurationSchema` 渲染 Thinking Effort picker、`applyReasoningEffort` 优先读取 picker 选择回退 `defaultReasoningEffort`
+- [x] **P0 token 计数重写**:新建 `src/tokenizer.ts` + `src/cjs_encode.ts`,保留 customendpoint 结构(LRU 缓存 + countMessageTokens + countToolTokens + 图片/文档成本),文本计数改用轻量级字符估算(`estimateTokens`)替代 gpt-tokenizer BPE
+- [x] P1 更新 README 的「已知限制」(Token 计数为轻量级字符估算,误差 ±10%;并移除 gpt-tokenizer 相关说明)
+- [x] P2 配置 schema 补全 customendpoint 剩余字段（`editTools`、`zeroDataRetentionEnabled`、`supportsReasoningEffort`、`reasoningEffortFormat`、`defaultReasoningEffort`）——全部已实现：`editTools` 传递到 capabilities（`enabledApiProposals` 已移除，运行时为 `undefined` 被 VS Code 忽略）、`zeroDataRetentionEnabled` 控制 Responses API `store`（不依赖 proposed API）、`applyReasoningEffort` 使用 `defaultReasoningEffort` 写入请求体（picker 因 proposed API 移除不再渲染）
 - [x] P3 内联提示词(inline completion)——已实现：`completions.ts` `KaiInlineCompletionProvider`，FIM prompt+suffix 请求，独立于 Copilot 登录/订阅。`kaicustomendpoint.inlineCompletion` 配置（`pattern` + 可选 `language`/`prompt` + `model`），`url` 为全地址不做路径拼接。stable API 一次性返回（渐进式渲染为 Copilot 私有通道，不支持）
 - [ ] P4 实际端点联调测试(本地 Ollama / vLLM 网关)
+- [ ] P5 清理残留:`.vscodeignore` 中 gpt-tokenizer 排除规则、`package-lock.json` 中 gpt-tokenizer 依赖项(如已从 package.json 移除,可用 `npm install` 刷新锁文件)
 
 ## 九、proposed API 使用说明
 
-`package.json` 中声明了 `enabledApiProposals: ["chatProvider"]`，解锁以下功能：
+`package.json` 中的 `enabledApiProposals: ["chatProvider"]` **已移除**(commit `af60f3f`,面向 Marketplace 发布,仅使用 stable API)。
 
-| 功能 | 依赖的 proposed API 扩展 | 说明 |
+移除后的实际行为:
+
+| 功能 | 状态 | 说明 |
 |---|---|---|
-| `editTools` | `LanguageModelChatCapabilities.editTools` | 传递编辑工具偏好到编辑器 |
-| `zeroDataRetentionEnabled` | 无（kai 自行处理 `store` 字段） | Responses API 中设 `store: false` |
-| Thinking Effort picker | `LanguageModelChatInformation.configurationSchema` | 模型选择器中渲染下拉选择器 |
-| 读取 picker 选择 | `ProvideLanguageModelChatResponseOptions.modelConfiguration` | `applyReasoningEffort` 优先使用 picker 值 |
+| `editTools` | ❌ 失效 | `LanguageModelChatCapabilities.editTools` 为 proposed API,运行时为 `undefined`,VS Code 忽略 |
+| `zeroDataRetentionEnabled` | ✅ 生效 | 不依赖 proposed API,kai 自行处理 Responses API 的 `store: false` |
+| `defaultReasoningEffort` + `reasoningEffortFormat` | ✅ 生效 | `applyReasoningEffort` 直接写入请求体,不依赖 proposed API |
+| Thinking Effort picker | ❌ 不渲染 | `configurationSchema` / `modelConfiguration` 为 proposed API,运行时为 `undefined`,模型选择器中不再显示下拉选择器 |
 
-**发布到 Marketplace 时**：删除 `package.json` 中的 `enabledApiProposals` 字段。删除后：
-- `editTools` / `configurationSchema` / `modelConfiguration` 运行时为 `undefined`，VS Code 忽略
-- `defaultReasoningEffort` + `reasoningEffortFormat` 照常工作（不依赖 proposed API）
-- `zeroDataRetentionEnabled` 照常工作（kai 自行处理，不依赖 proposed API）
-- 代码无需修改，所有 proposed API 字段均以可选方式传递
+代码无需修改:所有 proposed API 字段均以可选方式传递(运行时为 `undefined` 即被忽略)。
 
 ## 十、参考源码索引(只读,勿改仓库)
 

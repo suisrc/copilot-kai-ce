@@ -168,5 +168,5 @@ Web 版本的 VS Code 将 `chatLanguageModels.json` 保存在浏览器的 Indexe
 ## 已知限制
 
 - API Key 明文存储（设计使然，解决 Web 刷新丢失问题）；可通过 `kaicustomendpoint.secrets` + 引用语法分离密钥
-- `editTools` / Thinking Effort picker 依赖 proposed API（`chatProvider`），需通过 vsix 安装生效；发布到 Marketplace 时需移除 `enabledApiProposals`
+- `editTools` / Thinking Effort picker 依赖 proposed API（`chatProvider`），本扩展未声明 `enabledApiProposals`，运行时为 `undefined` 被 VS Code 忽略（不影响 `defaultReasoningEffort` / `zeroDataRetentionEnabled`）
 - 内联补全为一次性返回完整补全（stable API 不支持 AsyncIterable 渐进式渲染，那是 Copilot 内部私有通道）
