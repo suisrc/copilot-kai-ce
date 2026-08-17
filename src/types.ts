@@ -48,9 +48,9 @@ export interface KaiModelConfig {
 	readonly maxOutputTokens?: number;
 	/** 完整上下文窗口（输入+输出）token 数 */
 	readonly contextWindow?: number;
-	/** 是否支持工具调用 */
+	/** 是否支持工具调用（默认 true，仅显式 false 时禁用） */
 	readonly toolCalling?: boolean;
-	/** 是否支持图片输入 */
+	/** 是否支持图片输入（默认 false） */
 	readonly vision?: boolean;
 	/** 是否支持思考能力 */
 	readonly thinking?: boolean;

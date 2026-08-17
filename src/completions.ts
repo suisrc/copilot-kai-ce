@@ -207,14 +207,15 @@ export class KaiInlineCompletionProvider implements vscode.InlineCompletionItemP
 
 			// -op 调试模式：后台读取响应头 + 响应体（clone 不阻塞主流解析）
 			// 持有 Promise，异常路径下 await 确保响应体已记录
-			const responseLogPromise = logEnabled ? logResponseInfo(response, logUid!) : undefined;
+			const responseLogPromise = logEnabled ? logResponseInfo(response, logUid!, 'completions') : undefined;
 
 			try {
 				return await this.accumulateStream(response);
 			} finally {
-				// 主流解析完成后（含异常），等待响应日志写入完毕再返回
+				// 主流解析完成后（含异常），等待响应日志写入完毕再返回。
+				// 日志写入/合并失败绝不影响业务：错误已由 logger 自行打印，这里吞掉
 				if (responseLogPromise) {
-					await responseLogPromise;
+					await responseLogPromise.catch(() => { /* 日志错误已打印，业务不感知 */ });
 				}
 			}
 		} catch (e) {

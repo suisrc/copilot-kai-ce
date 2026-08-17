@@ -30,6 +30,8 @@ import { ApiType, KaiModelConfig, PROVIDER_VENDOR } from './types';
  * 附加字段仅在本扩展内部使用，不会被 VS Code 透传给其他扩展。
  */
 export interface KaiModelInformation extends vscode.LanguageModelChatInformation {
+	/** 内部：发送给 API 的真实模型 ID（registry `id` 可能已被 name 取代用于区分分组，不能用于请求体） */
+	readonly apiModelId: string;
 	/** 内部：该模型所属分组名（用于错误提示） */
 	readonly groupName: string;
 	/** 内部：完整端点 URL（含 API 路径） */
@@ -556,14 +558,17 @@ export class KaiCustomEndpointProvider implements vscode.LanguageModelChatProvid
 
 				infos.push({
 					// VS Code 契约字段
-					id: model.id,
+					// id 优先用 name：不同分组中同 id 的模型会互相覆盖，用 name 加以区分；
+					// 真实 API 模型 ID 存入内部字段 apiModelId，请求时使用
+					id: model.name ?? model.id,
 					name: model.name ?? model.id,
 					family: model.id,
 					version: '1.0.0',
 					maxInputTokens: limits.maxInputTokens,
 					maxOutputTokens: limits.maxOutputTokens,
 					capabilities: {
-						toolCalling: !!model.toolCalling,
+						// toolCalling 默认为 true（与 package.json schema 一致），仅显式 false 时禁用
+						toolCalling: model.toolCalling !== false,
 						imageInput: !!model.vision,
 						// proposed API chatProvider：editTools 作为 hint 传给编辑器
 						...(model.editTools ? { editTools: model.editTools } : {}),
@@ -587,6 +592,7 @@ export class KaiCustomEndpointProvider implements vscode.LanguageModelChatProvid
 					detail: group.name,
 					tooltip: `${model.name ?? model.id} provided by KaiCE (Group: ${group.name}).`,
 					// 内部字段
+					apiModelId: model.id,
 					groupName: group.name,
 					endpointUrl,
 					apiType,
@@ -638,12 +644,12 @@ export class KaiCustomEndpointProvider implements vscode.LanguageModelChatProvid
 		switch (model.apiType) {
 			case 'chat-completions': {
 				const tools: OpenAITool[] | undefined = options.tools && options.tools.length > 0 ? toOpenAITools(options.tools) : undefined;
-				body = buildChatCompletionRequest(model.id, toOpenAIMessages(messages), { tools, toolChoice, modelOptions: mergedModelOptions });
+				body = buildChatCompletionRequest(model.apiModelId, toOpenAIMessages(messages), { tools, toolChoice, modelOptions: mergedModelOptions });
 				break;
 			}
 			case 'responses': {
 				const tools: ResponsesTool[] | undefined = options.tools && options.tools.length > 0 ? toResponsesTools(options.tools) : undefined;
-				body = buildResponsesRequest(model.id, toResponsesInput(messages), { tools, toolChoice, modelOptions: mergedModelOptions });
+				body = buildResponsesRequest(model.apiModelId, toResponsesInput(messages), { tools, toolChoice, modelOptions: mergedModelOptions });
 				// ZDR：启用零数据保留时显式设 store: false（参考 copilot 的 createRequestBody）
 				if (model.zeroDataRetentionEnabled) {
 					(body as Record<string, unknown>).store = false;
@@ -653,7 +659,7 @@ export class KaiCustomEndpointProvider implements vscode.LanguageModelChatProvid
 			case 'messages': {
 				const tools: AnthropicTool[] | undefined = options.tools && options.tools.length > 0 ? toAnthropicTools(options.tools) : undefined;
 				const { messages: anthropicMessages, systemText } = toAnthropicMessages(messages);
-				body = buildMessagesRequest(model.id, anthropicMessages, systemText, {
+				body = buildMessagesRequest(model.apiModelId, anthropicMessages, systemText, {
 					tools,
 					toolChoice,
 					modelOptions: mergedModelOptions,
@@ -687,7 +693,7 @@ export class KaiCustomEndpointProvider implements vscode.LanguageModelChatProvid
 			logRequestStart({
 				uid: logUid!,
 				kind: 'chat',
-				modelId: model.id,
+				modelId: model.apiModelId,
 				groupName: model.groupName,
 				url: model.endpointUrl,
 				headers,
@@ -709,7 +715,7 @@ export class KaiCustomEndpointProvider implements vscode.LanguageModelChatProvid
 
 			// -op 调试模式：后台读取响应头 + 响应体（clone 不阻塞主流解析）
 			// 持有 Promise，异常路径下 await 确保响应体已记录
-			const responseLogPromise = logEnabled ? logResponseInfo(response, logUid!) : undefined;
+			const responseLogPromise = logEnabled ? logResponseInfo(response, logUid!, model.apiType) : undefined;
 
 			// 按协议分发流式解析
 			try {
@@ -725,15 +731,16 @@ export class KaiCustomEndpointProvider implements vscode.LanguageModelChatProvid
 						break;
 				}
 			} finally {
-				// 主流解析完成后（含异常），等待响应日志写入完毕再继续
+				// 主流解析完成后（含异常），等待响应日志写入完毕再继续。
+				// 日志写入/合并失败绝不影响业务：错误已由 logger 自行打印，这里吞掉
 				if (responseLogPromise) {
-					await responseLogPromise;
+					await responseLogPromise.catch(() => { /* 日志错误已打印，业务不感知 */ });
 				}
 			}
 		} catch (e) {
 			// -op 调试模式：请求异常（网络错误 / 非 2xx / 流解析错误）同样记录到 KaiCE 输出面板
 			if (logEnabled) {
-				logRequestError('chat', model.id, e, logUid!);
+				logRequestError('chat', model.apiModelId, e, logUid!);
 			}
 			throw e;
 		} finally {

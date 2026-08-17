@@ -36,7 +36,6 @@ Web 版本的 VS Code 将 `chatLanguageModels.json` 保存在浏览器的 Indexe
           "id": "qwen3.7-plus",
           "name": "kai-qwen3.7-plus",
           "url": "https://dashscope.aliyuncs.com/apps/anthropic",
-          "toolCalling": true,
           "vision": true,
           "maxInputTokens": 256000,
           "maxOutputTokens": 16000,
@@ -55,7 +54,6 @@ Web 版本的 VS Code 将 `chatLanguageModels.json` 保存在浏览器的 Indexe
           "id": "deepseek-v4-flash",
           "name": "kai-deepseek-v4-flash",
           "url": "https://api.deepseek.com/anthropic",
-          "toolCalling": true,
           "vision": false,
           "maxInputTokens": 1000000,
           "maxOutputTokens": 100000,
@@ -66,7 +64,6 @@ Web 版本的 VS Code 将 `chatLanguageModels.json` 保存在浏览器的 Indexe
           "id": "deepseek-v4-pro",
           "name": "kai-deepseek-v4-pro",
           "url": "https://api.deepseek.com/anthropic",
-          "toolCalling": true,
           "vision": false,
           "maxInputTokens": 1000000,
           "maxOutputTokens": 100000,
@@ -85,7 +82,6 @@ Web 版本的 VS Code 将 `chatLanguageModels.json` 保存在浏览器的 Indexe
           "id": "glm-5.3",
           "name": "kai-glm-5.3",
           "url": "https://open.bigmodel.cn/api/anthropic",
-          "toolCalling": true,
           "vision": false,
           "maxInputTokens": 1000000,
           "maxOutputTokens": 100000,
@@ -96,7 +92,6 @@ Web 版本的 VS Code 将 `chatLanguageModels.json` 保存在浏览器的 Indexe
           "id": "glm-5.2",
           "name": "kai-glm-5.2",
           "url": "https://open.bigmodel.cn/api/anthropic",
-          "toolCalling": true,
           "vision": false,
           "maxInputTokens": 1000000,
           "maxOutputTokens": 100000,
@@ -115,7 +110,6 @@ Web 版本的 VS Code 将 `chatLanguageModels.json` 保存在浏览器的 Indexe
           "id": "deepseek-v4-flash",
           "name": "kai-deepseek-v4-op",
           "url": "https://api.deepseek.com/anthropic",
-          "toolCalling": true,
           "vision": false,
           "maxInputTokens": 1000000,
           "maxOutputTokens": 100000,
@@ -124,7 +118,26 @@ Web 版本的 VS Code 将 `chatLanguageModels.json` 保存在浏览器的 Indexe
           "metadata": {"user_id": "op-user-0001"},
         }
       ]
-    }
+    },
+    {
+      "name": "deepseek-oa",
+      "vendor": "customendpoint",
+      "apiKey": "${input:chat.lm.secret.deepseek}",
+      "apiType": "chat-completions",
+      "models": [
+        {
+          "id": "deepseek-v4-flash",
+          "name": "kai-deepseek-v4-oa",
+          "url": "https://api.deepseek.com",
+          "vision": false,
+          "maxInputTokens": 1000000,
+          "maxOutputTokens": 100000,
+          "defaultReasoningEffort": "high",
+          "supportsReasoningEffort": ["none", "low", "high", "max", "low-op", "high-op", "max-op"],
+          "metadata": {"user_id": "user-0002"},
+        }
+      ]
+    },
   ]
 }
 ```
@@ -143,7 +156,7 @@ Web 版本的 VS Code 将 `chatLanguageModels.json` 保存在浏览器的 Indexe
 | `apiKey` | API Key，支持两种写法：明文（如 `"sk-xxxx"`）或引用（`"${input:chat.lm.secret.<id>}"`，从 `kaicustomendpoint.secrets` 查找）；留空则不带 `Authorization` 头 |
 | `apiType` | `chat-completions`（默认）/ `responses` / `messages`（均完整支持） |
 | `url` | Base URL，支持显式 API 路径；自动拼接 `/v1` + API 路径 |
-| `models[]` | 模型列表，字段与 customendpoint 一致（`id` / `name` / `url` / `apiType` / `maxInputTokens` / `maxOutputTokens` / `contextWindow` / `toolCalling` / `vision` / `thinking` / `streaming` / `requestHeaders` / `modelOptions` / `metadata`） |
+| `models[]` | 模型列表，字段与 customendpoint 一致（`id` / `name` / `url` / `apiType` / `maxInputTokens` / `maxOutputTokens` / `contextWindow` / `toolCalling`（默认 `true`，仅显式 `false` 时禁用）/ `vision`（默认 `false`）/ `thinking` / `streaming` / `requestHeaders` / `modelOptions` / `metadata`） |
 
 
 如果不想将 API Key 直接写在模型配置中，可以使用引用语法将密钥分离到 `kaicustomendpoint.secrets`：

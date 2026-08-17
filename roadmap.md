@@ -51,7 +51,8 @@ extensionsCG/copilot-kai-ce/
 │   ├── provider.ts     # KaiCustomEndpointProvider:LanguageModelChatProvider 实现(核心)
 │   │                   #   含 sanitizeCustomHeaders(请求头安全过滤)
 │   │                   #   含 mergedModelOptions(请求级参数合并)
-│   │                   #   含 applyReasoningEffort(推理努力级别写入请求体)
+│   │                   #   含 applyReasoningEffort(思考级别写入请求体,支持 -op 调试后缀)
+│   │                   #   含 applyMetadata(metadata 按协议注入)
 │   │                   #   含 System 消息处理、reasoning_content 输出
 │   ├── client.ts       # 网关客户端:URL 解析 + 三种协议请求构造 + 通用 SSE 解析
 │   │                   #   + FIM 补全请求构造(buildKaiCompletionRequest/streamKaiCompletions)
@@ -59,6 +60,7 @@ extensionsCG/copilot-kai-ce/
 │   ├── tokenizer.ts    # token 计数:轻量估算(基于 cjs_encode.ts)+ LRU 缓存 + 图片/文档/消息/工具计数
 │   ├── config.ts       # 读取 kaicustomendpoint.models(vendor 过滤)+ inlineCompletion
 │   ├── completions.ts  # KaiInlineCompletionProvider:内联补全(FIM prompt+suffix,独立于 Copilot)
+│   ├── logger.ts       # KaiCE 调试日志(OUTPUT 面板「KaiCE」通道):effort 带 -op 后缀时打印请求/响应详情,后缀不写入请求体
 │   └── types.ts        # 类型定义 + vendor 常量
 ├── out/                # 编译输出(tsc → JS)
 └── dist/               # 打包产物(vsix)
@@ -80,9 +82,12 @@ extensionsCG/copilot-kai-ce/
 | `tokenizer.ts` — `BPETokenizer` / `countMessageTokens` / `calculateImageTokenCost` | `tokenizer.ts` + `cjs_encode.ts` | ✅ 已实现(轻量字符估算替代 gpt-tokenizer BPE,结构保留) |
 | `byokStorageService.ts` — secrets 存储 | 直接用 settings.json(明文) | ✅ 重新设计 |
 | `byokProvider.ts` — `resolveModelInfo` / `byokKnownModelToAPIInfo` | `provider.ts` `provideLanguageModelChatInformation` | ✅ 已实现 |
+| 注册表 id 与 API model 分离(分组防覆盖) | `provider.ts`(registry `id` 用 `model.name ?? model.id` 区分不同分组中的同 id 模型;真实模型 ID 存内部字段 `apiModelId`,请求体 `model` 字段与调试日志使用 `apiModelId`) | ✅ 已实现 |
 | System 消息处理(chat-completions/responses) | `provider.ts` `toOpenAIMessages` / `toResponsesInput` | ✅ 已实现 |
 | `reasoning_content` 流式输出 | `provider.ts` `processChatCompletionsStream` | ✅ 已实现 |
-| `reasoningEffortFormat` / `defaultReasoningEffort` / `supportsReasoningEffort` | `provider.ts` `applyReasoningEffort` + `package.json` schema + `types.ts` | ✅ 已实现（`defaultReasoningEffort` 直接写入请求体，不依赖 proposed API；picker UI 因 `enabledApiProposals` 已移除不再渲染） |
+| `reasoningEffortFormat` / `defaultReasoningEffort` / `supportsReasoningEffort` | `provider.ts` `applyReasoningEffort` + `package.json` schema + `types.ts` | ✅ 已实现（`defaultReasoningEffort` 直接写入请求体，不依赖 proposed API；picker UI 因 `enabledApiProposals` 已移除不再渲染。条目支持带 `-op` 调试后缀，如 `high-op`，请求时去后缀并经 `logger.ts` 打印请求/响应详情） |
+| KaiCE 调试日志（`-op` 后缀） | `logger.ts` + `extension.ts`（注册 `disposeLogger`）+ 请求链路 | ✅ 已实现（effort 以 `-op` 结尾时启用：OUTPUT 面板「KaiCE」通道打印请求头/体、响应头/体，同一请求共享 request UID，`-op` 不写入请求体；通道随扩展卸载自动销毁，避免残留/重复。响应体按协议合并 SSE 为协议最终完整对象，非 SSE 响应（如 JSON 错误体）回退为原始文本前 N 字符。双阈值：`MAX_RAW_CHARS`=1M 防病态流硬上限、`MAX_LOG_CHARS`=100K 单段日志展示上限；请求体截断保留末尾、响应体截断保留开头，提示文案分别标注 last/first。**并发安全**：每个日志块拼成单个字符串后用一次 `append` 写入，避免并发请求日志行穿插——`appendLine` 仅单行原子，多行组合会因 async `await` 切换事件循环被其它请求穿插） |
+| metadata 注入（协议自适应） | `provider.ts` `applyMetadata` + `completions.ts` + `package.json` schema + `types.ts` | ✅ 已实现（Anthropic 协议合并进请求体 `metadata` 容器，如 `{"user_id":"xxx"}`；OpenAI 协议展开到请求体顶层，如 `{"user":"xxx"}`；FIM 展开到补全请求体顶层；已存在字段优先，不被覆盖） |
 | `editTools` / `zeroDataRetentionEnabled` | `provider.ts` + `package.json` schema + `types.ts` | ✅ 已实现（`enabledApiProposals` 已移除：`editTools` 运行时为 `undefined` 被 VS Code 忽略；`zeroDataRetentionEnabled` 由 kai 自行处理 `store` 字段，不依赖 proposed API） |
 | Thinking Effort picker UI（`configurationSchema`） | `provider.ts` `provideLanguageModelChatInformation` | ✅ 已实现（`enabledApiProposals` 已移除，picker 不再渲染；`defaultReasoningEffort` 直接写入请求体仍生效，不依赖 proposed API） |
 | `fetch.ts` — `CompletionRequest`（FIM prompt+suffix 请求） | `client.ts` `buildKaiCompletionRequest` + `completions.ts` | ✅ 已实现（补全固定走 FIM `/completions`，`url` 为全地址不做路径拼接） |
@@ -108,6 +113,18 @@ extensionsCG/copilot-kai-ce/
 **请求级参数合并**(参考 `OpenAIEndpoint._applyConfiguredModelOptions`):
 - `options.modelOptions`(请求级,如调用方传入的 `temperature`)与 `model.modelOptions`(配置级)合并
 - 请求级值优先于配置级值
+
+**思考级别 `-op` 调试后缀**(`logger.ts`):
+- `supportsReasoningEffort` / `defaultReasoningEffort` 条目支持 `-op` 后缀(如 `high-op`),与去后缀条目(如 `high`)相互独立、可并存
+- 选中带 `-op` 的条目时,请求发送前去除后缀(模型只收到真实级别),并在 OUTPUT 面板「KaiCE」通道打印请求头、请求体、响应头、响应体
+- 同一请求的所有日志共用 request UID(短随机串),便于关联定位;通道随扩展卸载自动销毁(extension.ts 注册 `disposeLogger`)
+- 响应体按协议合并 SSE 为协议最终完整对象(`readResponseBodyForLog`):**增量字段拼接、其余字段后值覆盖,不新增/不删除/不改字段名**——messages 合并为单个 message 对象(content 块按 `delta.type` 拼接:`text_delta→text`、`thinking_delta→thinking`、`signature_delta→signature`、`input_json_delta→partial_json`(tool_use 最终解析为 `input`),`message_delta` 填 `stop_reason`/`usage`);chat-completions 合并为单个 chunk 对象(`delta.content`/`reasoning_content`/`tool_calls[].function.arguments` 拼接);responses 合并为单个 response 对象(output 数组 `output_text`/`function_call_arguments` 拼接);completions 合并为单个 completion 对象(`choices[].text` 拼接)。非 SSE 响应(如 JSON 错误体)回退原文。敏感头打码、单段限长 `MAX_LOG_CHARS` 与 `MAX_RAW_CHARS`(原始字节硬上限)
+- **日志链路全兜底**:合并/写入错误绝不影响正常业务——`logError` 的 console 与通道写入各自独立 try/catch,绝不抛出;单行 SSE 合并失败仅打印一次后继续;调用侧 `await responseLogPromise.catch(() => {})` 吞掉,`finally` 中不会用日志错误覆盖业务结果
+
+**metadata 注入**(`provider.ts` `applyMetadata`):
+- Anthropic 协议(messages):合并为请求体 `metadata` 字段,已存在的 metadata 优先,不被覆盖(如 `{"user_id":"xxx"}`)
+- OpenAI 协议(chat-completions / responses):展开到请求体顶层,已存在字段优先(如 `{"user":"xxx"}`)
+- FIM 补全(`completions.ts`):展开到补全请求体顶层(OpenAI 补全协议)
 
 ## 六、token 计数(已实现,`tokenizer.ts` + `cjs_encode.ts`)
 
@@ -146,6 +163,9 @@ extensionsCG/copilot-kai-ce/
 - vendor 双轨制一致性:通过(注册 ID `kaicustomendpoint`,配置值 `customendpoint`)
 - token 计数轻量化:移除 gpt-tokenizer(4.76MB 词表,187 文件)→ `cjs_encode.ts` 字符估算(±10%),打包体积显著下降
 - 内联补全:stable API 一次性返回,`buildKaiCompletionRequest` FIM prompt+suffix 请求验证通过
+- 调试日志:`-op` 后缀识别(`high-op`→true、`high-OP`→false)、request UID 生成、OUTPUT 通道随扩展卸载自动销毁(commit `79ae16a`)
+- metadata 注入:Anthropic 合并进 `metadata` 容器、OpenAI/FIM 展开请求体顶层,已存在字段优先不被覆盖(commit `79ae16a`)
+- 打包:branding 统一为 KaiCE、版本 v0.0.2,`make clean && make package` 通过,vsix 正常生成(2.07 MB)
 
 ## 八、待办清单(按优先级)
 
@@ -153,7 +173,8 @@ extensionsCG/copilot-kai-ce/
 - [x] P1 更新 README 的「已知限制」(Token 计数为轻量级字符估算,误差 ±10%;并移除 gpt-tokenizer 相关说明)
 - [x] P2 配置 schema 补全 customendpoint 剩余字段（`editTools`、`zeroDataRetentionEnabled`、`supportsReasoningEffort`、`reasoningEffortFormat`、`defaultReasoningEffort`）——全部已实现：`editTools` 传递到 capabilities（`enabledApiProposals` 已移除，运行时为 `undefined` 被 VS Code 忽略）、`zeroDataRetentionEnabled` 控制 Responses API `store`（不依赖 proposed API）、`applyReasoningEffort` 使用 `defaultReasoningEffort` 写入请求体（picker 因 proposed API 移除不再渲染）
 - [x] P3 内联提示词(inline completion)——已实现：`completions.ts` `KaiInlineCompletionProvider`，FIM prompt+suffix 请求，独立于 Copilot 登录/订阅。`kaicustomendpoint.inlineCompletion` 配置（`pattern` + 可选 `language`/`prompt` + `model`），`url` 为全地址不做路径拼接。stable API 一次性返回（渐进式渲染为 Copilot 私有通道，不支持）
-- [ ] P4 实际端点联调测试(本地 Ollama / vLLM 网关)
+- [x] **P4 KaiCE 调试日志 + metadata 注入**（commit `79ae16a`）——新增 `logger.ts`：`supportsReasoningEffort`/`defaultReasoningEffort` 条目支持 `-op` 调试后缀（如 `high-op`），请求时去后缀并经 OUTPUT 面板「KaiCE」通道打印请求/响应详情（同请求共享 UID，通道随扩展卸载销毁）；模型配置新增 `metadata` 字段按协议自适应注入（Anthropic 进 `metadata` 容器、OpenAI/FIM 展开请求体顶层，已存在字段优先）；同批统一品牌为 KaiCE、版本升至 v0.0.2、README 补充 glm-5.3 与 `defaultReasoningEffort` 示例
+- [ ] P5 实际端点联调测试(本地 Ollama / vLLM 网关)
 
 ## 九、proposed API 使用说明
 
