@@ -1,8 +1,8 @@
 {
   "name": "copilot-kai-ce",
-  "displayName": "Kai CE",
+  "displayName": "KaiCE",
   "description": "基于 customendpoint 模型供应商重构的对话模型供应商。模型配置与 API Key 明文保存在 settings.json（kaicustomendpoint.models）中，避免 Web 版本 chatLanguageModels.json 仅存于浏览器 IndexedDB 导致刷新后丢失的问题。",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "publisher": "suisrc",
   "license": "MIT",
   "icon": "logo.png",
@@ -22,11 +22,11 @@
     "languageModelChatProviders": [
       {
         "vendor": "kaicustomendpoint",
-        "displayName": "Kai CE"
+        "displayName": "KaiCE"
       }
     ],
     "configuration": {
-      "title": "Kai CE",
+      "title": "KaiCE",
       "properties": {
         "kaicustomendpoint.models": {
           "type": "array",
@@ -167,14 +167,14 @@
                     },
                     "supportsReasoningEffort": {
                       "type": "array",
-                      "markdownDescription": "模型接受的推理努力级别（如 [\"low\", \"medium\", \"high\"]）。配置后模型选择器中会出现「Thinking Effort」picker（proposed API chatProvider）。",
+                      "markdownDescription": "模型接受的思考级别（如 [\"low\", \"medium\", \"high\"]）。配置后模型选择器中会出现「Thinking Effort」picker（proposed API chatProvider）。支持带 `-op` 调试后缀的条目（如 `\"high-op\"`），请求时自动去除后缀并启用 KaiCE 调试日志（在 OUTPUT 面板打印请求/响应详情）。",
                       "items": {
                         "type": "string"
                       }
                     },
                     "defaultReasoningEffort": {
                       "type": "string",
-                      "markdownDescription": "默认推理努力级别（如 medium）。picker 未选择时使用此值。须在 supportsReasoningEffort 列表中。"
+                      "markdownDescription": "默认思考级别（如 medium）。picker 未选择时使用此值。须精确存在于 supportsReasoningEffort 列表中（`high` 与 `high-op` 是两个独立条目，可并存）。以 `-op` 结尾时启用 KaiCE 调试日志：在 OUTPUT 面板打印请求头、请求体、响应头与响应体，且 `-op` 后缀不会写入请求体。"
                     },
                     "reasoningEffortFormat": {
                       "type": "string",
@@ -183,7 +183,7 @@
                         "responses",
                         "messages"
                       ],
-                      "markdownDescription": "将推理努力级别转发给模型时使用的请求体格式。chat-completions 发送顶层 reasoning_effort 字符串；responses 发送嵌套的 reasoning.effort 对象；messages 发送 Anthropic Messages 的 output_config.effort 字段。未设置时根据模型 apiType 推断。"
+                      "markdownDescription": "将思考级别转发给模型时使用的请求体格式。chat-completions 发送顶层 reasoning_effort 字符串；responses 发送嵌套的 reasoning.effort 对象；messages 发送 Anthropic Messages 的 output_config.effort 字段。未设置时根据模型 apiType 推断。"
                     },
                     "requestHeaders": {
                       "type": "object",
@@ -196,6 +196,11 @@
                       "type": "object",
                       "additionalProperties": true,
                       "description": "透传给请求体的模型参数（如 temperature 等）"
+                    },
+                    "metadata": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "markdownDescription": "元数据/扩展字段，按协议自适应注入：\n- **Anthropic 协议**（messages）：作为请求体的 `metadata` 字段发送（如 `{\"user_id\":\"xxx\"}`）\n- **OpenAI 协议**（chat-completions / responses）：展开到请求体顶层（如 `{\"user\":\"xxx\"}`）\n已存在的请求体字段优先，不被覆盖。"
                     }
                   }
                 }
@@ -213,7 +218,7 @@
         },
         "kaicustomendpoint.inlineCompletion": {
           "type": "object",
-          "markdownDescription": "内联补全（ghost text）配置。配置后 Kai CE 会注册独立的补全 provider（与 GitHub Copilot 解耦，不依赖登录/订阅）。补全请求使用 FIM（Fill-in-the-Middle）格式，直接调用模型配置中的全地址端点。**必须配置 `model` 才生效。**",
+          "markdownDescription": "内联补全（ghost text）配置。配置后 KaiCE 会注册独立的补全 provider（与 GitHub Copilot 解耦，不依赖登录/订阅）。补全请求使用 FIM（Fill-in-the-Middle）格式，直接调用模型配置中的全地址端点。**必须配置 `model` 才生效。**",
           "default": {},
           "properties": {
             "pattern": {
@@ -267,7 +272,7 @@
                 },
                 "defaultReasoningEffort": {
                   "type": "string",
-                  "description": "默认推理努力级别，非空时透传为请求体的 reasoning_effort 字段。"
+                  "markdownDescription": "默认思考级别，非空时透传为请求体的 reasoning_effort 字段。以 `-op` 结尾时启用 KaiCE 调试日志（在 OUTPUT 面板打印请求/响应详情），`-op` 后缀不会写入请求体（如 `\"high-op\"` 发送 `reasoning_effort: \"high\"`）。"
                 },
                 "requestHeaders": {
                   "type": "object",
@@ -280,6 +285,11 @@
                   "type": "object",
                   "additionalProperties": true,
                   "description": "透传给 FIM 请求体的模型参数（如 temperature 等）。"
+                },
+                "metadata": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "markdownDescription": "元数据/扩展字段，展开到 FIM 请求体顶层（FIM 走 OpenAI 补全协议）。已存在的请求体字段优先，不被覆盖。"
                 }
               }
             }

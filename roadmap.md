@@ -1,4 +1,4 @@
-# Kai CE — 开发路线图
+# KaiCE — 开发路线图
 
 > 本文件是开发的一手参考。修改代码前先读本文件,避免重复分析。
 > 核心原则:**整体参考 VS Code Copilot 扩展的 `customendpoint` 实现**(`extensions/copilot/src/extension/byok/vscode-node/customEndpointProvider.ts` 及下游链路),不自己发明协议处理逻辑。只在「配置存储(settings.json 明文)」与「不依赖 copilot 私有服务」两点上偏离。

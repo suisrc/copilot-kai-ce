@@ -79,7 +79,7 @@ export function resolveCustomEndpointUrl(url: string, apiType?: ApiType): string
 export function resolveModelEndpoint(model: KaiModelConfig, group: KaiProviderGroup): { url: string; apiType: ApiType } {
 	const baseUrl = model.url ?? group.url;
 	if (!baseUrl) {
-		throw new Error(`模型 ${model.id} 与分组 ${group.name} 均未配置 url`);
+		throw new Error(`Model ${model.id} and group ${group.name} have no url configured`);
 	}
 	const apiType = model.apiType ?? group.apiType ?? inferApiTypeFromUrl(baseUrl);
 	return { url: resolveCustomEndpointUrl(baseUrl, apiType), apiType };
@@ -107,7 +107,7 @@ export async function* streamSSE(response: Response): AsyncGenerator<SSEEvent> {
 		throw new Error(`HTTP ${response.status} ${response.statusText}${errorText ? `: ${errorText.slice(0, 500)}` : ''}`);
 	}
 	if (!response.body) {
-		throw new Error('响应体为空');
+		throw new Error('Response body is empty');
 	}
 
 	const reader = response.body.getReader();

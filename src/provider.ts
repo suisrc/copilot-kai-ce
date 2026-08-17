@@ -20,6 +20,7 @@ import {
 	streamChatCompletions,
 	streamSSE,
 } from './client';
+import { generateRequestUid, isLogEffort, logRequestError, logRequestStart, logResponseInfo, stripLogEffort } from './logger';
 import { countMessageTokens, countTextTokens } from './tokenizer';
 import { getProviderGroups, resolveSecret } from './config';
 import { ApiType, KaiModelConfig, PROVIDER_VENDOR } from './types';
@@ -41,11 +42,13 @@ export interface KaiModelInformation extends vscode.LanguageModelChatInformation
 	readonly requestHeaders?: Record<string, string>;
 	/** 内部：透传模型参数 */
 	readonly modelOptions?: Record<string, unknown>;
-	/** 内部：支持的推理努力级别 */
+	/** 内部：元数据/扩展字段（Anthropic 进 metadata，OpenAI 进顶层） */
+	readonly metadata?: Record<string, unknown>;
+	/** 内部：支持的思考级别 */
 	readonly supportsReasoningEffort?: string[];
-	/** 内部：默认推理努力级别 */
+	/** 内部：默认思考级别 */
 	readonly defaultReasoningEffort?: string;
-	/** 内部：推理努力级别写入请求体的格式 */
+	/** 内部：思考级别写入请求体的格式 */
 	readonly reasoningEffortFormat?: 'chat-completions' | 'responses' | 'messages';
 	/** 内部：编辑工具偏好（proposed API chatProvider） */
 	readonly editTools?: string[];
@@ -60,6 +63,21 @@ function resolveTokenLimits(model: KaiModelConfig): { maxInputTokens: number; ma
 	const remainingInputBudget = Math.max(0, contextWindow - maxOutputTokens);
 	const maxInputTokens = Math.min(model.maxInputTokens ?? remainingInputBudget, remainingInputBudget);
 	return { maxInputTokens, maxOutputTokens };
+}
+
+/**
+ * 计算 configurationSchema 中 reasoningEffort 的默认展示值。
+ * `high` 与 `high-op` 是两个独立条目（可并存），picker 显示原值不做改写；
+ * 是否启用调试日志完全由用户选择带 `-op` 后缀的条目决定。
+ * 优先用配置的 defaultReasoningEffort（须精确存在于 supports 列表中），
+ * 否则取列表中第一个非 "none" 的值。
+ */
+function resolveSchemaDefaultEffort(model: { supportsReasoningEffort?: string[]; defaultReasoningEffort?: string }): string | undefined {
+	const supports = model.supportsReasoningEffort ?? [];
+	if (model.defaultReasoningEffort && supports.includes(model.defaultReasoningEffort)) {
+		return model.defaultReasoningEffort;
+	}
+	return supports.find(e => e !== 'none') ?? supports[0];
 }
 
 //#region 消息 / 工具转换
@@ -558,10 +576,8 @@ export class KaiCustomEndpointProvider implements vscode.LanguageModelChatProvid
 									type: 'string',
 									title: 'Thinking Effort',
 									enum: model.supportsReasoningEffort,
-									// 默认值：优先用配置的 defaultReasoningEffort，否则取列表中第一个非 "none" 的值
-									default: (model.defaultReasoningEffort && model.supportsReasoningEffort.includes(model.defaultReasoningEffort))
-										? model.defaultReasoningEffort
-										: model.supportsReasoningEffort.find(e => e !== 'none') ?? model.supportsReasoningEffort[0],
+									// 默认值：优先用配置的 defaultReasoningEffort（去除 -op 调试后缀），否则取列表中第一个非 "none" 的值
+									default: resolveSchemaDefaultEffort(model),
 									group: 'navigation',
 								},
 							},
@@ -569,7 +585,7 @@ export class KaiCustomEndpointProvider implements vscode.LanguageModelChatProvid
 					} : {}),
 					// detail 显示分组名，便于区分同供应商的多个分组
 					detail: group.name,
-					tooltip: `${model.name ?? model.id} 由 Kai CE（分组：${group.name}）提供。`,
+					tooltip: `${model.name ?? model.id} provided by KaiCE (Group: ${group.name}).`,
 					// 内部字段
 					groupName: group.name,
 					endpointUrl,
@@ -577,6 +593,7 @@ export class KaiCustomEndpointProvider implements vscode.LanguageModelChatProvid
 					apiKey: resolveSecret(group.apiKey),
 					requestHeaders: model.requestHeaders,
 					modelOptions: model.modelOptions,
+					metadata: model.metadata,
 					supportsReasoningEffort: model.supportsReasoningEffort,
 					defaultReasoningEffort: model.defaultReasoningEffort,
 					reasoningEffortFormat: model.reasoningEffortFormat,
@@ -597,7 +614,7 @@ export class KaiCustomEndpointProvider implements vscode.LanguageModelChatProvid
 		token: vscode.CancellationToken,
 	): Promise<void> {
 		if (!model.endpointUrl) {
-			throw new Error(`模型 ${model.id}（分组 ${model.groupName}）未配置 url`);
+			throw new Error(`Model ${model.id} (Group: ${model.groupName}) has no url configured`);
 		}
 
 		// 构造请求头（按协议差异处理鉴权方式）
@@ -645,13 +662,38 @@ export class KaiCustomEndpointProvider implements vscode.LanguageModelChatProvid
 				break;
 			}
 			default:
-				throw new Error(`不支持的 API 类型：${model.apiType}`);
+				throw new Error(`Unsupported API type: ${model.apiType}`);
 		}
 
-		// 应用推理努力级别（参考 copilot 的 OpenAIEndpoint._applyReasoningEffort）
+		// 注入扩展字段（metadata）：
+		// - Anthropic 协议（messages）：作为请求体的 metadata 字段
+		// - OpenAI 协议（chat-completions / responses）：展开到请求体顶层
+		this.applyMetadata(body, model.apiType, model.metadata);
+
+		// 解析思考级别（含 -op 调试后缀检测；参考 copilot 的 OpenAIEndpoint._applyReasoningEffort）
 		// 优先使用 proposed API 的 modelConfiguration.reasoningEffort（picker 选择），
 		// 回退到配置中的 defaultReasoningEffort
-		this.applyReasoningEffort(body, model, options);
+		const effort = this.resolveEffort(model, options);
+		this.applyReasoningEffort(body, model, effort);
+
+		// -op 调试模式：effort 以 -op 结尾时，在 KaiCE 输出面板打印请求头 / 请求体。
+		// 同一请求的请求/响应/异常日志共用同一个 UID，便于在 OUTPUT 面板关联定位
+		const logEnabled = isLogEffort(effort);
+		const logUid = logEnabled ? generateRequestUid() : undefined;
+
+		// 请求体原始文本：日志与 fetch 共用同一串，保证日志所见即网络所发
+		const bodyText = JSON.stringify(body);
+		if (logEnabled) {
+			logRequestStart({
+				uid: logUid!,
+				kind: 'chat',
+				modelId: model.id,
+				groupName: model.groupName,
+				url: model.endpointUrl,
+				headers,
+				body: bodyText,
+			});
+		}
 
 		// AbortSignal 桥接
 		const abortController = new AbortController();
@@ -661,54 +703,87 @@ export class KaiCustomEndpointProvider implements vscode.LanguageModelChatProvid
 			const response = await fetch(model.endpointUrl, {
 				method: 'POST',
 				headers,
-				body: JSON.stringify(body),
+				body: bodyText,
 				signal: abortController.signal,
 			});
 
+			// -op 调试模式：后台读取响应头 + 响应体（clone 不阻塞主流解析）
+			// 持有 Promise，异常路径下 await 确保响应体已记录
+			const responseLogPromise = logEnabled ? logResponseInfo(response, logUid!) : undefined;
+
 			// 按协议分发流式解析
-			switch (model.apiType) {
-				case 'chat-completions':
-					await this.processChatCompletionsStream(response, progress);
-					break;
-				case 'responses':
-					await this.processResponsesStream(response, progress);
-					break;
-				case 'messages':
-					await this.processMessagesStream(response, progress);
-					break;
+			try {
+				switch (model.apiType) {
+					case 'chat-completions':
+						await this.processChatCompletionsStream(response, progress);
+						break;
+					case 'responses':
+						await this.processResponsesStream(response, progress);
+						break;
+					case 'messages':
+						await this.processMessagesStream(response, progress);
+						break;
+				}
+			} finally {
+				// 主流解析完成后（含异常），等待响应日志写入完毕再继续
+				if (responseLogPromise) {
+					await responseLogPromise;
+				}
 			}
+		} catch (e) {
+			// -op 调试模式：请求异常（网络错误 / 非 2xx / 流解析错误）同样记录到 KaiCE 输出面板
+			if (logEnabled) {
+				logRequestError('chat', model.id, e, logUid!);
+			}
+			throw e;
 		} finally {
 			listener.dispose();
 		}
 	}
 
 	/**
-	 * 将推理努力级别写入请求体（参考 copilot 的 OpenAIEndpoint._applyReasoningEffort）。
+	 * 解析最终生效的思考级别（原始值，可能带 `-op` 调试后缀）。
+	 * `high` 与 `high-op` 是两个独立条目（可并存），picker 选哪个就用哪个，
+	 * 是否启用调试日志完全由用户选择带 `-op` 后缀的条目决定。
+	 *
 	 * 优先使用 proposed API 的 modelConfiguration.reasoningEffort（picker 选择），
-	 * 回退到配置中的 defaultReasoningEffort。
-	 * - format 为 'chat-completions'：顶层 `reasoning_effort` 字符串
-	 * - format 为 'responses'：嵌套 `reasoning.effort`
-	 * - format 为 'messages'：`output_config.effort`
-	 * - format 未设置时根据 model.apiType 推断
+	 * 回退到配置中的 defaultReasoningEffort，最后取 supportsReasoningEffort 列表中
+	 * 第一个非 "none" 的值。均与 supports 列表精确匹配（不做后缀剥离）。
 	 */
-	private applyReasoningEffort(body: object, model: KaiModelInformation, options: vscode.ProvideLanguageModelChatResponseOptions): void {
+	private resolveEffort(model: KaiModelInformation, options: vscode.ProvideLanguageModelChatResponseOptions): string | undefined {
 		const supports = model.supportsReasoningEffort;
 		if (!supports?.length) {
-			return;
+			return undefined;
 		}
 
 		// proposed API chatProvider：从 modelConfiguration 读取 picker 选择值
 		const modelConfig = (options as { modelConfiguration?: { reasoningEffort?: string } }).modelConfiguration;
 		const pickerEffort = typeof modelConfig?.reasoningEffort === 'string' ? modelConfig.reasoningEffort : undefined;
 
+		// 精确匹配 supports 列表（high 与 high-op 是不同条目，各自独立）
+		const matches = (candidate: string | undefined): boolean => !!candidate && supports.includes(candidate);
+
 		// 回退顺序：picker 选择值 → 配置的 defaultReasoningEffort → 列表中第一个非 "none" 的值
-		const fallbackDefault = model.defaultReasoningEffort && supports.includes(model.defaultReasoningEffort)
+		const fallbackDefault = matches(model.defaultReasoningEffort)
 			? model.defaultReasoningEffort
 			: supports.find(e => e !== 'none') ?? undefined;
 
-		const effort = (pickerEffort && supports.includes(pickerEffort))
-			? pickerEffort
-			: fallbackDefault;
+		return matches(pickerEffort) ? pickerEffort : fallbackDefault;
+	}
+
+	/**
+	 * 将思考级别写入请求体（参考 copilot 的 OpenAIEndpoint._applyReasoningEffort）。
+	 * 写入前去除 `-op` 调试后缀，模型只会收到真实的思考级别。
+	 * - format 为 'chat-completions'：顶层 `reasoning_effort` 字符串
+	 * - format 为 'responses'：嵌套 `reasoning.effort`
+	 * - format 为 'messages'：`output_config.effort`
+	 * - format 未设置时根据 model.apiType 推断
+	 */
+	private applyReasoningEffort(body: object, model: KaiModelInformation, effort: string | undefined): void {
+		const supports = model.supportsReasoningEffort;
+		if (!supports?.length || !effort) {
+			return;
+		}
 
 		const format = model.reasoningEffortFormat ?? model.apiType;
 		const bodyObj = body as Record<string, unknown>;
@@ -724,17 +799,45 @@ export class KaiCustomEndpointProvider implements vscode.LanguageModelChatProvid
 			bodyObj.output_config = Object.keys(rest).length > 0 ? rest : undefined;
 		}
 
-		// "none" 表示关闭思考：清理所有 reasoning 相关字段后直接返回，不写入请求体
-		if (!effort || effort === 'none') {
+		// 去除 -op 调试后缀；"none" 表示关闭思考：清理所有 reasoning 相关字段后直接返回，不写入请求体
+		const realEffort = stripLogEffort(effort);
+		if (!realEffort || realEffort === 'none') {
 			return;
 		}
 
 		if (format === 'responses') {
-			bodyObj.reasoning = { ...bodyObj.reasoning as object | undefined, effort };
+			bodyObj.reasoning = { ...bodyObj.reasoning as object | undefined, effort: realEffort };
 		} else if (format === 'messages') {
-			bodyObj.output_config = { ...bodyObj.output_config as object | undefined, effort };
+			bodyObj.output_config = { ...bodyObj.output_config as object | undefined, effort: realEffort };
 		} else {
-			bodyObj.reasoning_effort = effort;
+			bodyObj.reasoning_effort = realEffort;
+		}
+	}
+
+	/**
+	 * 注入元数据/扩展字段（metadata），按协议自适应：
+	 * - Anthropic 协议（messages）：作为请求体的 `metadata` 字段（已存在的 metadata 优先，不被覆盖）
+	 * - OpenAI 协议（chat-completions / responses）：展开到请求体顶层（已存在的字段优先，不被覆盖）
+	 * 设计依据：OpenAI 顶层为封闭 schema 但扩展字段平铺到顶层（如 user）；
+	 * Anthropic 顶层同样封闭，扩展字段须进 metadata 容器（如 user_id）。
+	 */
+	private applyMetadata(body: object, apiType: ApiType, metadata: Record<string, unknown> | undefined): void {
+		if (!metadata || Object.keys(metadata).length === 0) {
+			return;
+		}
+		const bodyObj = body as Record<string, unknown>;
+
+		if (apiType === 'messages') {
+			// Anthropic：合并到 metadata（已存在的 metadata 优先，不被覆盖）
+			const existingMetadata = (bodyObj.metadata ?? {}) as Record<string, unknown>;
+			bodyObj.metadata = { ...metadata, ...existingMetadata };
+		} else {
+			// OpenAI：展开到顶层（已存在的字段优先，不被覆盖）
+			for (const [key, value] of Object.entries(metadata)) {
+				if (bodyObj[key] === undefined) {
+					bodyObj[key] = value;
+				}
+			}
 		}
 	}
 
@@ -795,7 +898,7 @@ export class KaiCustomEndpointProvider implements vscode.LanguageModelChatProvid
 
 		for await (const chunk of streamChatCompletions(response)) {
 			if (chunk.error?.message) {
-				throw new Error(`模型请求失败：${chunk.error.message}`);
+				throw new Error(`Model request failed: ${chunk.error.message}`);
 			}
 			const delta = chunk.choices?.[0]?.delta;
 			if (!delta) {
@@ -869,7 +972,7 @@ export class KaiCustomEndpointProvider implements vscode.LanguageModelChatProvid
 			// 错误
 			if (data.type === 'error' && data.error && typeof data.error === 'object') {
 				const err = data.error as { message?: string };
-				throw new Error(`模型请求失败：${err.message ?? JSON.stringify(data.error)}`);
+				throw new Error(`Model request failed: ${err.message ?? JSON.stringify(data.error)}`);
 			}
 
 			switch (data.type) {
@@ -967,7 +1070,7 @@ export class KaiCustomEndpointProvider implements vscode.LanguageModelChatProvid
 			// 错误
 			if (data.type === 'error' && data.error && typeof data.error === 'object') {
 				const err = data.error as { message?: string };
-				throw new Error(`模型请求失败：${err.message ?? JSON.stringify(data.error)}`);
+				throw new Error(`Model request failed: ${err.message ?? JSON.stringify(data.error)}`);
 			}
 
 			switch (data.type) {

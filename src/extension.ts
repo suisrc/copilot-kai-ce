@@ -7,6 +7,7 @@ import * as vscode from 'vscode';
 import { KaiCustomEndpointProvider } from './provider';
 import { KaiInlineCompletionProvider } from './completions';
 import { getInlineCompletionConfig } from './config';
+import { disposeLogger } from './logger';
 import { CONFIG_INLINE_COMPLETION_KEY, CONFIG_MODELS_KEY, PROVIDER_VENDOR } from './types';
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -20,6 +21,8 @@ export function activate(context: vscode.ExtensionContext): void {
 				provider.notifyConfigurationChanged();
 			}
 		}),
+		// KaiCE 调试输出通道：扩展卸载/重载窗口时自动销毁，避免残留/重复通道
+		{ dispose: disposeLogger },
 	);
 
 	// 内联补全：配置了 kaicustomendpoint.inlineCompletion 且含 model 时才注册

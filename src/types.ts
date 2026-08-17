@@ -60,16 +60,23 @@ export interface KaiModelConfig {
 	readonly editTools?: string[];
 	/** 是否启用零数据保留 ZDR（proposed API chatProvider） */
 	readonly zeroDataRetentionEnabled?: boolean;
-	/** 支持的推理努力级别，如 ['low', 'medium', 'high']。picker UI 依赖 proposed API chatProvider，但 defaultReasoningEffort 可独立生效 */
+	/** 支持的思考级别，如 ['low', 'medium', 'high']。picker UI 依赖 proposed API chatProvider，但 defaultReasoningEffort 可独立生效。支持带 `-op` 调试后缀的条目（如 'high-op'），与去后缀的条目（如 'high'）相互独立、可并存；选择带 `-op` 的条目时启用 KaiCE 调试日志，后缀不写入请求体 */
 	readonly supportsReasoningEffort?: string[];
-	/** 推理努力级别写入请求体的格式，未设置时根据 apiType 推断 */
+	/** 思考级别写入请求体的格式，未设置时根据 apiType 推断 */
 	readonly reasoningEffortFormat?: 'chat-completions' | 'responses' | 'messages';
-	/** 默认推理努力级别，请求时直接写入请求体（不依赖 proposed API） */
+	/** 默认思考级别，请求时直接写入请求体（不依赖 proposed API）。须精确存在于 supportsReasoningEffort 列表中；以 `-op` 结尾时启用 KaiCE 调试日志（打印请求/响应详情），后缀不写入请求体 */
 	readonly defaultReasoningEffort?: string;
 	/** 附加请求头 */
 	readonly requestHeaders?: Record<string, string>;
 	/** 透传给请求体的模型参数 */
 	readonly modelOptions?: Record<string, unknown>;
+	/**
+	 * 元数据/扩展字段，按协议自适应注入：
+	 * - Anthropic 协议（messages）：作为请求体的 `metadata` 字段发送（如 `{"user_id":"xxx"}`）
+	 * - OpenAI 协议（chat-completions / responses）：展开到请求体顶层（如 `{"user":"xxx"}`）
+	 * 已存在的请求体字段优先，不被覆盖。
+	 */
+	readonly metadata?: Record<string, unknown>;
 }
 
 /** 供应商分组配置，与 chatLanguageModels.json 中单个 group 的结构一致 */
@@ -103,17 +110,22 @@ export interface KaiInlineCompletionModelConfig {
 	readonly apiKey?: string;
 	/** 最大输出 token 数 */
 	readonly maxOutputTokens?: number;
-	/** 默认推理努力级别（透传给 FIM 请求体，模型支持时生效） */
+	/** 默认思考级别（透传给 FIM 请求体，模型支持时生效）。以 `-op` 结尾时启用 KaiCE 调试日志，后缀不写入请求体 */
 	readonly defaultReasoningEffort?: string;
 	/** 附加请求头，支持 `${apiKey}` 插值 */
 	readonly requestHeaders?: Record<string, string>;
 	/** 透传给 FIM 请求体的模型参数（如 temperature 等） */
 	readonly modelOptions?: Record<string, unknown>;
+	/**
+	 * 元数据/扩展字段，展开到 FIM 请求体顶层（FIM 走 OpenAI 补全协议）。
+	 * 用于补充协议未覆盖的字段，如 `user_id` 等。已存在的请求体字段优先，不被覆盖。
+	 */
+	readonly metadata?: Record<string, unknown>;
 }
 
 /**
  * 内联补全配置（`kaicustomendpoint.inlineCompletion`）。
- * 未配置（或 model 缺失）时，Kai CE 不注册补全 provider。
+ * 未配置（或 model 缺失）时，KaiCE 不注册补全 provider。
  */
 export interface KaiInlineCompletionConfig {
 	/** 文档匹配 glob（DocumentSelector 的 pattern），如 `"**"` */

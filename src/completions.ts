@@ -6,6 +6,7 @@
 import * as vscode from 'vscode';
 import { buildKaiCompletionRequest, streamKaiCompletions } from './client';
 import { resolveSecret } from './config';
+import { generateRequestUid, isLogEffort, logRequestError, logRequestStart, logResponseInfo, stripLogEffort } from './logger';
 import { countTextTokens } from './tokenizer';
 import { KaiInlineCompletionConfig, KaiInlineCompletionModelConfig } from './types';
 
@@ -111,7 +112,7 @@ export class KaiInlineCompletionProvider implements vscode.InlineCompletionItemP
 			return [new vscode.InlineCompletionItem(completion, range)];
 		} catch (e) {
 			// 补全请求失败应静默，不打扰用户（参考 Copilot 对 provider 异常的处理）
-			console.debug('[Kai CE] inline completion failed:', e);
+			console.debug('[KaiCE] inline completion failed:', e);
 			return [];
 		}
 	}
@@ -139,7 +140,7 @@ export class KaiInlineCompletionProvider implements vscode.InlineCompletionItemP
 		}
 		const url = model.url;
 		if (!url) {
-			console.debug('[Kai CE] inline completion: model url not configured');
+			console.debug('[KaiCE] inline completion: model url not configured');
 			return undefined;
 		}
 
@@ -151,10 +152,15 @@ export class KaiInlineCompletionProvider implements vscode.InlineCompletionItemP
 			: prefix;
 		const requestSuffix = this._config.prompt ? '' : suffix;
 
-		// 透传默认推理努力级别（若配置了非空值）
+		// 透传默认思考级别。effort 以 -op 结尾时启用 KaiCE 调试日志，
+		// 后缀仅作为调试开关，不写入请求体（high-op → reasoning_effort: "high"）。
+		// 同一请求的请求/响应/异常日志共用同一个 UID，便于在 OUTPUT 面板关联定位
+		const logEnabled = isLogEffort(model.defaultReasoningEffort);
+		const logUid = logEnabled ? generateRequestUid() : undefined;
+		const effort = stripLogEffort(model.defaultReasoningEffort);
 		const modelOptions: Record<string, unknown> = { ...model.modelOptions };
-		if (model.defaultReasoningEffort) {
-			modelOptions['reasoning_effort'] = model.defaultReasoningEffort;
+		if (effort) {
+			modelOptions['reasoning_effort'] = effort;
 		}
 
 		const body = buildKaiCompletionRequest(model.id, renderedPrompt, requestSuffix, {
@@ -162,7 +168,32 @@ export class KaiInlineCompletionProvider implements vscode.InlineCompletionItemP
 			modelOptions,
 		});
 
+		// 注入 metadata：FIM 走 OpenAI 补全协议，展开到请求体顶层（已存在字段优先）
+		if (model.metadata) {
+			const bodyObj = body as Record<string, unknown>;
+			for (const [key, value] of Object.entries(model.metadata)) {
+				if (bodyObj[key] === undefined) {
+					bodyObj[key] = value;
+				}
+			}
+		}
+
 		const headers = this.buildHeaders(model);
+
+		// 请求体原始文本：日志与 fetch 共用同一串，保证日志所见即网络所发
+		const bodyText = JSON.stringify(body);
+
+		// -op 调试模式：在 KaiCE 输出面板打印请求头 / 请求体
+		if (logEnabled) {
+			logRequestStart({
+				uid: logUid!,
+				kind: 'inline-completion',
+				modelId: model.id,
+				url,
+				headers,
+				body: bodyText,
+			});
+		}
 
 		const abortController = new AbortController();
 		const listener = token.onCancellationRequested(() => abortController.abort());
@@ -170,10 +201,28 @@ export class KaiInlineCompletionProvider implements vscode.InlineCompletionItemP
 			const response = await fetch(url, {
 				method: 'POST',
 				headers,
-				body: JSON.stringify(body),
+				body: bodyText,
 				signal: abortController.signal,
 			});
-			return await this.accumulateStream(response);
+
+			// -op 调试模式：后台读取响应头 + 响应体（clone 不阻塞主流解析）
+			// 持有 Promise，异常路径下 await 确保响应体已记录
+			const responseLogPromise = logEnabled ? logResponseInfo(response, logUid!) : undefined;
+
+			try {
+				return await this.accumulateStream(response);
+			} finally {
+				// 主流解析完成后（含异常），等待响应日志写入完毕再返回
+				if (responseLogPromise) {
+					await responseLogPromise;
+				}
+			}
+		} catch (e) {
+			// -op 调试模式：请求异常同样记录到 KaiCE 输出面板
+			if (logEnabled) {
+				logRequestError('inline-completion', model.id, e, logUid!);
+			}
+			throw e;
 		} finally {
 			listener.dispose();
 		}
@@ -214,7 +263,7 @@ export class KaiInlineCompletionProvider implements vscode.InlineCompletionItemP
 		let text = '';
 		for await (const chunk of streamKaiCompletions(response)) {
 			if (chunk.error?.message) {
-				throw new Error(`模型请求失败：${chunk.error.message}`);
+				throw new Error(`Model request failed: ${chunk.error.message}`);
 			}
 			const delta = chunk.choices?.[0]?.text;
 			if (delta) {

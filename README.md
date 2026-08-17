@@ -1,4 +1,4 @@
-# Kai CE
+# KaiCE
 
 基于 VS Code `customendpoint` 模型供应商重构的对话模型供应商扩展。
 
@@ -40,7 +40,8 @@ Web 版本的 VS Code 将 `chatLanguageModels.json` 保存在浏览器的 Indexe
           "vision": true,
           "maxInputTokens": 256000,
           "maxOutputTokens": 16000,
-          "supportsReasoningEffort": ["low", "medium", "high", "xhigh"]
+          "defaultReasoningEffort": "high",
+          "supportsReasoningEffort": ["none", "low", "medium", "high", "xhigh", "max"]
         }
       ]
     },
@@ -58,7 +59,8 @@ Web 版本的 VS Code 将 `chatLanguageModels.json` 保存在浏览器的 Indexe
           "vision": false,
           "maxInputTokens": 1000000,
           "maxOutputTokens": 100000,
-          "supportsReasoningEffort": ["low", "medium", "high", "xhigh"]
+          "defaultReasoningEffort": "high",
+          "supportsReasoningEffort": ["none", "low", "high", "max"]
         },
         {
           "id": "deepseek-v4-pro",
@@ -68,7 +70,8 @@ Web 版本的 VS Code 将 `chatLanguageModels.json` 保存在浏览器的 Indexe
           "vision": false,
           "maxInputTokens": 1000000,
           "maxOutputTokens": 100000,
-          "supportsReasoningEffort": ["low", "medium", "high", "xhigh"]
+          "defaultReasoningEffort": "high",
+          "supportsReasoningEffort": ["none", "low", "high", "max"]
         }
       ]
     },
@@ -79,6 +82,17 @@ Web 版本的 VS Code 将 `chatLanguageModels.json` 保存在浏览器的 Indexe
       "apiType": "messages",
       "models": [
         {
+          "id": "glm-5.3",
+          "name": "kai-glm-5.3",
+          "url": "https://open.bigmodel.cn/api/anthropic",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 1000000,
+          "maxOutputTokens": 100000,
+          "defaultReasoningEffort": "high",
+          "supportsReasoningEffort": ["low", "high", "max"]
+        },
+        {
           "id": "glm-5.2",
           "name": "kai-glm-5.2",
           "url": "https://open.bigmodel.cn/api/anthropic",
@@ -86,7 +100,28 @@ Web 版本的 VS Code 将 `chatLanguageModels.json` 保存在浏览器的 Indexe
           "vision": false,
           "maxInputTokens": 1000000,
           "maxOutputTokens": 100000,
-          "supportsReasoningEffort": ["low", "medium", "high", "xhigh"]
+          "defaultReasoningEffort": "high",
+          "supportsReasoningEffort": ["none", "low", "medium", "high", "xhigh", "max"]
+        }
+      ]
+    },
+    {
+      "name": "deepseek-op",
+      "vendor": "customendpoint",
+      "apiKey": "${input:chat.lm.secret.deepseek}",
+      "apiType": "messages",
+      "models": [
+        {
+          "id": "deepseek-v4-flash",
+          "name": "kai-deepseek-v4-op",
+          "url": "https://api.deepseek.com/anthropic",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 1000000,
+          "maxOutputTokens": 100000,
+          "defaultReasoningEffort": "high",
+          "supportsReasoningEffort": ["none", "low", "high", "max", "low-op", "high-op", "max-op"],
+          "metadata": {"user_id": "op-user-0001"},
         }
       ]
     }
@@ -108,7 +143,7 @@ Web 版本的 VS Code 将 `chatLanguageModels.json` 保存在浏览器的 Indexe
 | `apiKey` | API Key，支持两种写法：明文（如 `"sk-xxxx"`）或引用（`"${input:chat.lm.secret.<id>}"`，从 `kaicustomendpoint.secrets` 查找）；留空则不带 `Authorization` 头 |
 | `apiType` | `chat-completions`（默认）/ `responses` / `messages`（均完整支持） |
 | `url` | Base URL，支持显式 API 路径；自动拼接 `/v1` + API 路径 |
-| `models[]` | 模型列表，字段与 customendpoint 一致（`id` / `name` / `url` / `apiType` / `maxInputTokens` / `maxOutputTokens` / `contextWindow` / `toolCalling` / `vision` / `thinking` / `streaming` / `requestHeaders` / `modelOptions`） |
+| `models[]` | 模型列表，字段与 customendpoint 一致（`id` / `name` / `url` / `apiType` / `maxInputTokens` / `maxOutputTokens` / `contextWindow` / `toolCalling` / `vision` / `thinking` / `streaming` / `requestHeaders` / `modelOptions` / `metadata`） |
 
 
 如果不想将 API Key 直接写在模型配置中，可以使用引用语法将密钥分离到 `kaicustomendpoint.secrets`：
@@ -126,6 +161,49 @@ Web 版本的 VS Code 将 `chatLanguageModels.json` 保存在浏览器的 Indexe
   }
 }
 ```
+
+### 扩展字段（`metadata`）
+
+用于补充协议未覆盖的请求体字段，按协议自适应注入：
+
+- **Anthropic 协议**（`messages`）：作为请求体的 `metadata` 字段发送（如 `{"user_id":"xxx"}`）
+  - Anthropic 顶层为封闭 schema，扩展字段须进 `metadata` 容器
+- **OpenAI 协议**（`chat-completions` / `responses` / FIM 补全）：作为 `extraBody` 展开，合并到请求体顶层（如 `{"user":"xxx"}`）
+  - OpenAI 采用顶层平铺设计，扩展字段为顶层命名参数
+
+已存在的请求体字段优先，不被覆盖。
+
+```jsonc
+{
+  "id": "my-model",
+  "metadata": {"user_id": "log-user-0001"}
+}
+```
+
+### 调试：`-op` 推理级别
+
+`defaultReasoningEffort`（及 `supportsReasoningEffort` 条目）支持一种特殊的 `*-op` 写法：以全小写 `-op` 结尾时（大小写敏感，如 `high-op`；`high-OP` 不生效；`op` 为 output 缩写），KaiCE 会在 VS Code 的 OUTPUT 面板「KaiCE」通道打印本次请求的完整调试信息：
+
+- **请求 Headers**（鉴权头部分打码）
+- **请求 Body**：完整请求体（含 `model` / `messages` / `max_tokens` / `stream` / `reasoning_effort` 等参数，FIM 补全则为 `prompt` + `suffix`）
+- **响应 Status + Headers**
+- **响应 Body**（含 SSE 原始流）
+
+每次请求会生成一个 UID（如 `[UID lzw4f-3kf9xq]`），同一请求的请求日志、响应日志与异常日志共用该 UID，便于在 OUTPUT 面板中关联定位。
+
+`-op` 后缀仅作为调试开关，**不会写入请求体**：`high-op` 实际发送 `reasoning_effort: "high"`（或对应协议的 effort 字段）。`high` 与 `high-op` 是两个独立条目，可同时存在于 `supportsReasoningEffort` 列表中，picker 各自独立显示；是否启用调试日志完全由用户选择带 `-op` 后缀的条目决定。
+
+```jsonc
+{
+  "id": "my-model",
+  // high 与 high-op 并存：picker 各自独立显示，用户选哪个用哪个
+  "supportsReasoningEffort": ["low", "medium", "high", "high-op"],
+  // 默认启用调试日志：打印请求/响应详情到 OUTPUT 面板「KaiCE」，实际发送 reasoning_effort: "high"
+  "defaultReasoningEffort": "high-op"
+}
+```
+
+内联补全（`kaicustomendpoint.inlineCompletion.model.defaultReasoningEffort`）同样支持 `-op` 写法。
 
 ## 当前支持范围
 
