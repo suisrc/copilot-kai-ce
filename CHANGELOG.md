@@ -1,29 +1,43 @@
-# Change Log
+# Change Log / 更新日志
+
+## [0.0.3] - 2026-08-18
+
+### 修复 / Fixed
+
+1. 修复对话用量统计失效，上下文压缩恢复正常 — Fixed usage stats not updating; context compaction works again
+2. 修复未配置上下文窗口时模型无法使用的问题 — Fixed models failing when no context window is configured
+3. 修复流式输出不显示文字，思考过程实时可见 — Fixed streaming output; thinking is now shown in real time
+4. 修复内联补全请求头未做安全过滤，存在 HTTP 头注入风险 — Fixed inline completion headers not sanitized (HTTP header injection risk)
+
+### 改进 / Improved
+
+1. 优化流式渲染，文字与思考过程输出更流畅 — Smoother streaming for text and thinking output
+2. 提升 token 计数与配置读取速度，响应更迅速 — Faster token counting and config loading
+3. 优化内联补全上下文读取，大文件打字不卡顿 — Faster inline completion in large files
 
 ## [0.0.2] - 2026-08-18
 
-### Added
+### 新增 / Added
 
-- 新增内联补全（inline completion / ghost text），FIM prompt + suffix 独立于 Copilot 登录
-- KaiCE 调试日志（`-op` 后缀）、metadata 协议自适应注入、全局更名（vendor: `customendpoint` → `kaicustomendpoint`）
-- 新增 `vsce publish` 发布目标，移除废弃的 `chatProvider` API 提案
+1. 新增内联补全（代码联想）功能，独立于 Copilot 使用 — Added inline code completion, independent of Copilot
+2. 新增 KaiCE 调试日志功能，方便排查连接问题 — Added KaiCE debug logging for easier troubleshooting
+3. 新增一键发布扩展的功能，清理废弃的旧版接口 — Added one-click publishing; removed legacy APIs
 
-### Changed
+### 改进 / Improved
 
-- 移除 `gpt-tokenizer` 依赖，改用轻量级字符估算（`cjs_encode.ts`）
-- 日志并发安全重构，SSE 按协议合并
-- 移除 `enabledApiProposals` 相关描述，同步更新 roadmap 与 README
+1. 移除重量级分词库依赖，扩展体积更小更轻量 — Removed heavy tokenizer dependency; lighter extension
+2. 日志输出改为并发安全，多请求不再穿插混乱 — Concurrency-safe logging; no more mixed log lines
 
-### Fixed
+### 修复 / Fixed
 
-- 修复模型列表重复、工具 schema 为空以及 vendor 冲突问题
-- registry id 分组防覆盖，`toolCalling` 默认开启
+1. 修复模型列表重复显示、工具配置为空的问题 — Fixed duplicate models and empty tool configs
+2. 修复模型分组相互覆盖，工具调用默认开启 — Fixed overlapping model groups; tool calling on by default
 
 ## [0.0.1] - 2026-08-14
 
-### Added
+### 新增 / Added
 
-- 基于 VS Code `customendpoint` 重构的对话模型供应商（vendor: `customendpoint`）
-- 模型配置与 API Key 明文保存在 `settings.json`（`kaicustomendpoint.models`），结构与 `chatLanguageModels.json` 一致，解决 Web 版刷新丢失问题
-- 支持 `chat-completions` API：文本、工具调用、图片输入（vision）、流式输出
-- 配置变更实时刷新模型列表
+1. 首个版本，提供自定义对话模型供应商接入能力 — First release with custom chat model provider support
+2. 模型配置与密钥保存在 settings.json，刷新不丢失 — Config and keys saved in settings.json, survive refresh
+3. 支持对话、工具调用、图片识别和流式输出 — Supports chat, tools, vision and streaming
+4. 修改配置后实时刷新模型列表，无需重启 — Model list refreshes instantly on config change

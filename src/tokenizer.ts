@@ -207,7 +207,7 @@ export function estimateDocumentTokenCost(base64Data: string | undefined): numbe
 
 //#region 消息对象 token 计数（参考 customendpoint 的 countMessageObjectTokens）
 
-interface TokenCountablePart {
+export interface TokenCountablePart {
 	type?: string;
 	text?: string;
 	image_url?: { url?: string; detail?: 'low' | 'high' | 'auto' };
@@ -215,7 +215,7 @@ interface TokenCountablePart {
 	[key: string]: unknown;
 }
 
-interface TokenCountableMessage {
+export interface TokenCountableMessage {
 	role: string;
 	content?: string | TokenCountablePart[] | null;
 	name?: string;
@@ -225,7 +225,7 @@ interface TokenCountableMessage {
 }
 
 /** 递归统计消息对象各字段的 token 数(与 customendpoint 的 countMessageObjectTokens 一致) */
-async function countMessageObjectTokens(obj: Record<string, unknown>): Promise<number> {
+function countMessageObjectTokens(obj: Record<string, unknown>): number {
 	let numTokens = 0;
 	for (const [key, value] of Object.entries(obj)) {
 		if (!value) {
@@ -249,7 +249,7 @@ async function countMessageObjectTokens(obj: Record<string, unknown>): Promise<n
 					numTokens += textTokenLength(casted.image_url.url);
 				}
 			} else {
-				let newTokens = await countMessageObjectTokens(value as Record<string, unknown>);
+				let newTokens = countMessageObjectTokens(value as Record<string, unknown>);
 				if (key === 'tool_calls') {
 					// 估计值,加上一点安全余量
 					newTokens = Math.floor(newTokens * 1.5);
@@ -281,18 +281,18 @@ export function countTextTokens(text: string): number {
  * 计算单条 chat 消息的 token 数(含 BaseTokensPerMessage)。
  * 与 customendpoint 的 `countMessageTokens` 一致。
  */
-export async function countMessageTokens(message: Record<string, unknown>): Promise<number> {
-	return BaseTokensPerMessage + (await countMessageObjectTokens(message));
+export function countMessageTokens(message: Record<string, unknown>): number {
+	return BaseTokensPerMessage + countMessageObjectTokens(message);
 }
 
 /**
  * 计算多条消息的 token 总数(含 BaseTokensPerCompletion)。
  * 与 customendpoint 的 `countMessagesTokens` 一致。
  */
-export async function countMessagesTokens(messages: readonly TokenCountableMessage[]): Promise<number> {
+export function countMessagesTokens(messages: readonly TokenCountableMessage[]): number {
 	let numTokens = BaseTokensPerCompletion;
 	for (const message of messages) {
-		numTokens += await countMessageTokens(message);
+		numTokens += countMessageTokens(message);
 	}
 	return numTokens;
 }
@@ -300,7 +300,7 @@ export async function countMessagesTokens(messages: readonly TokenCountableMessa
 /**
  * 计算工具列表的 token 数(与 customendpoint 的 countToolTokens 一致)。
  */
-export async function countToolTokens(tools: readonly { name: string; description?: string; inputSchema?: object }[]): Promise<number> {
+export function countToolTokens(tools: readonly { name: string; description?: string; inputSchema?: object }[]): number {
 	const baseToolTokens = 16;
 	let numTokens = 0;
 	if (tools.length) {
@@ -310,7 +310,7 @@ export async function countToolTokens(tools: readonly { name: string; descriptio
 	const baseTokensPerTool = 8;
 	for (const tool of tools) {
 		numTokens += baseTokensPerTool;
-		numTokens += await countMessageObjectTokens({ name: tool.name, description: tool.description, parameters: tool.inputSchema });
+		numTokens += countMessageObjectTokens({ name: tool.name, description: tool.description, parameters: tool.inputSchema });
 	}
 
 	// 估计值,给一点安全余量

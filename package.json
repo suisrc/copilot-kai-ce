@@ -2,7 +2,7 @@
   "name": "copilot-kai-ce",
   "displayName": "KaiCE",
   "description": "基于 customendpoint 模型供应商重构的对话模型供应商。模型配置与 API Key 明文保存在 settings.json（kaicustomendpoint.models）中，避免 Web 版本 chatLanguageModels.json 仅存于浏览器 IndexedDB 导致刷新后丢失的问题。",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "publisher": "suisrc",
   "license": "MIT",
   "icon": "logo.png",

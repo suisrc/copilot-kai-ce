@@ -129,6 +129,9 @@ export async function* streamSSE(response: Response): AsyncGenerator<SSEEvent> {
 			for (const line of lines) {
 				const trimmed = line.trim();
 				if (trimmed === '') {
+					// 空行 = SSE 事件分隔：重置 event 字段（SSE 规范），
+					// 避免上一个事件的 event 粘滞到后续无 event 的事件
+					currentEvent = undefined;
 					continue;
 				}
 				if (trimmed.startsWith('event:')) {
@@ -190,6 +193,8 @@ export function buildChatCompletionRequest(modelId: string, messages: OpenAIMess
 		model: modelId,
 		messages,
 		stream: true,
+		// 请求流式 usage（最后一个 chunk 携带），供 VS Code Context Usage Widget / compaction 使用
+		stream_options: { include_usage: true },
 		...(opts.tools && opts.tools.length > 0 ? { tools: opts.tools } : {}),
 		...(opts.toolChoice ? { tool_choice: opts.toolChoice } : {}),
 		...opts.modelOptions,
@@ -212,6 +217,8 @@ export interface ChatCompletionChunk {
 		};
 		finish_reason?: string | null;
 	}>;
+	/** OpenAI 流式 usage（需 stream_options.include_usage=true，最后一个 chunk 携带） */
+	usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number; prompt_tokens_details?: { cached_tokens?: number }; completion_tokens_details?: { reasoning_tokens?: number } };
 	error?: { message?: string; type?: string };
 }
 

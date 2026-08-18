@@ -53,12 +53,13 @@ extensionsCG/copilot-kai-ce/
 │   │                   #   含 mergedModelOptions(请求级参数合并)
 │   │                   #   含 applyReasoningEffort(思考级别写入请求体,支持 -op 调试后缀)
 │   │                   #   含 applyMetadata(metadata 按协议注入)
+│   │                   #   含 usage report(三协议收集 usage 并 report,供 Context Usage Widget/compaction)
 │   │                   #   含 System 消息处理、reasoning_content 输出
 │   ├── client.ts       # 网关客户端:URL 解析 + 三种协议请求构造 + 通用 SSE 解析
 │   │                   #   + FIM 补全请求构造(buildKaiCompletionRequest/streamKaiCompletions)
 │   ├── cjs_encode.ts   # 轻量级 token 估算:字符分类统计(英文≈4字符/token、CJK≈1.5、标点≈3、空白≈4),误差±10%,替代 gpt-tokenizer BPE
 │   ├── tokenizer.ts    # token 计数:轻量估算(基于 cjs_encode.ts)+ LRU 缓存 + 图片/文档/消息/工具计数
-│   ├── config.ts       # 读取 kaicustomendpoint.models(vendor 过滤)+ inlineCompletion
+│   ├── config.ts       # 读取 kaicustomendpoint.models(vendor 过滤)+ inlineCompletion + readSecretsMap(secrets 批量预读)
 │   ├── completions.ts  # KaiInlineCompletionProvider:内联补全(FIM prompt+suffix,独立于 Copilot)
 │   ├── logger.ts       # KaiCE 调试日志(OUTPUT 面板「KaiCE」通道):effort 带 -op 后缀时打印请求/响应详情,后缀不写入请求体
 │   └── types.ts        # 类型定义 + vendor 常量
@@ -163,9 +164,13 @@ extensionsCG/copilot-kai-ce/
 - vendor 双轨制一致性:通过(注册 ID `kaicustomendpoint`,配置值 `customendpoint`)
 - token 计数轻量化:移除 gpt-tokenizer(4.76MB 词表,187 文件)→ `cjs_encode.ts` 字符估算(±10%),打包体积显著下降
 - 内联补全:stable API 一次性返回,`buildKaiCompletionRequest` FIM prompt+suffix 请求验证通过
+- **LLM 流式渲染性能修复**:①responses 协议 `output_text.delta` 原来攒着不 flush、整个 output item 生成期间 UI 无更新(chat-completions/messages 均逐 delta 实时输出),已改为立即 flush;②messages 协议 `thinking_delta` 原被忽略,模型生成长思考期间 UI 无反馈,已与 chat-completions 的 `reasoning_content` 一致实时输出;③responses 协议新增 `reasoning_summary_text.delta`/`response_text.delta` 实时输出;④内联补全 `extractContext` 窗口化(前缀 300 行/后缀 100 行),避免大文件全量 getText+逐行 token 估算造成键盘输入到请求发出的同步卡顿;⑤`streamSSE` 空行重置 `currentEvent`(SSE 规范,避免 event 字段粘滞);⑥token 计数函数(`countMessageObjectTokens`/`countMessageTokens`/`countMessagesTokens`/`countToolTokens`)由伪 async 改为同步,消除 provideTokenCount 频繁调用时的微任务调度开销;⑦`serializeToolResult` 共享 `TextDecoder` 实例。注:内联补全渐进式渲染为 VS Code stable API 不支持(`@types/vscode` 1.125 的 `provideInlineCompletionItems` 仅返回 `InlineCompletionItem[] | InlineCompletionList`,无 `AsyncIterable`),补全需等完整流生成,属设计限制
+- **usage report（修复 Context Usage Widget / compaction 失效）**:三种协议流式解析收集 usage 并在流结束后 report `LanguageModelDataPart`（MIME `usage`，与 Copilot 的 `CustomDataPartMimeTypes.Usage` 一致，内容为 `APIUsage` JSON `{prompt_tokens,completion_tokens,total_tokens,prompt_tokens_details.cached_tokens,completion_tokens_details.reasoning_tokens}`）——chat-completions 从最后一个 chunk 的 `usage` 收集（请求体加 `stream_options.include_usage=true`，`prompt_tokens` 已是总值）；responses 从 `response.completed` 事件的 `response.usage` 收集（`input_tokens` 已是总值）；messages 参考 Copilot `messagesApi.ts` 的 `AnthropicStreamingHandler`+`buildAnthropicCompletion`：`message_start` 初始化各 token 字段，`message_delta` 逐字段更新（`??` 保留已有值），流结束后合并 `prompt_tokens = input_tokens + cache_creation_input_tokens + cache_read_input_tokens`（Anthropic 的 `input_tokens` 只是非缓存部分）。端点不返回 usage 时延迟估算（`countMessagesTokens`+`countToolTokens`）。VS Code Context Usage Widget 与 compaction 据此显示上下文窗口使用量并触发压缩
+- **resolveTokenLimits 修复**:maxInputTokens/contextWindow 均未配置时给输入窗口默认 128000，避免仅有 maxOutputTokens 时 maxInputTokens=0 导致 VS Code 判定 context window 无效（totalContextWindow<=0）
+- **性能优化（全部）**:`resolveSecret` 批量预读 secrets（`readSecretsMap`，避免每个 group 重复读配置）；`sanitizeSchema` 用 WeakMap 缓存（同一 schema 对象复用清理结果，避免递归重建）
 - 调试日志:`-op` 后缀识别(`high-op`→true、`high-OP`→false)、request UID 生成、OUTPUT 通道随扩展卸载自动销毁(commit `79ae16a`)
 - metadata 注入:Anthropic 合并进 `metadata` 容器、OpenAI/FIM 展开请求体顶层,已存在字段优先不被覆盖(commit `79ae16a`)
-- 打包:branding 统一为 KaiCE、版本 v0.0.2,`make clean && make package` 通过,vsix 正常生成(2.07 MB)
+- 打包:版本 v0.0.3,`make clean && make package` 通过,vsix 正常生成(78.39 KB)
 
 ## 八、待办清单(按优先级)
 
@@ -174,7 +179,8 @@ extensionsCG/copilot-kai-ce/
 - [x] P2 配置 schema 补全 customendpoint 剩余字段（`editTools`、`zeroDataRetentionEnabled`、`supportsReasoningEffort`、`reasoningEffortFormat`、`defaultReasoningEffort`）——全部已实现：`editTools` 传递到 capabilities（`enabledApiProposals` 已移除，运行时为 `undefined` 被 VS Code 忽略）、`zeroDataRetentionEnabled` 控制 Responses API `store`（不依赖 proposed API）、`applyReasoningEffort` 使用 `defaultReasoningEffort` 写入请求体（picker 因 proposed API 移除不再渲染）
 - [x] P3 内联提示词(inline completion)——已实现：`completions.ts` `KaiInlineCompletionProvider`，FIM prompt+suffix 请求，独立于 Copilot 登录/订阅。`kaicustomendpoint.inlineCompletion` 配置（`pattern` + 可选 `language`/`prompt` + `model`），`url` 为全地址不做路径拼接。stable API 一次性返回（渐进式渲染为 Copilot 私有通道，不支持）
 - [x] **P4 KaiCE 调试日志 + metadata 注入**（commit `79ae16a`）——新增 `logger.ts`：`supportsReasoningEffort`/`defaultReasoningEffort` 条目支持 `-op` 调试后缀（如 `high-op`），请求时去后缀并经 OUTPUT 面板「KaiCE」通道打印请求/响应详情（同请求共享 UID，通道随扩展卸载销毁）；模型配置新增 `metadata` 字段按协议自适应注入（Anthropic 进 `metadata` 容器、OpenAI/FIM 展开请求体顶层，已存在字段优先）；同批统一品牌为 KaiCE、版本升至 v0.0.2、README 补充 glm-5.3 与 `defaultReasoningEffort` 示例
-- [ ] P5 实际端点联调测试(本地 Ollama / vLLM 网关)
+- [x] **P5 usage report + 性能调优**（v0.0.3）——①修复 VS Code Context Usage Widget / compaction 失效：三协议流式解析收集 usage 并 report `LanguageModelDataPart`（MIME `usage`，与 Copilot 的 `CustomDataPartMimeTypes.Usage` 一致）；②修复 `resolveTokenLimits` 仅配 maxOutputTokens 时 maxInputTokens=0 导致 context window 无效；③LLM 流式渲染修复（responses flush / messages thinking / responses reasoning）；④性能优化：token 计数同步化、streamSSE event 重置、resolveSecret 批量预读、sanitizeSchema WeakMap 缓存、serializeToolResult 共享 TextDecoder、extractContext 窗口化
+- [ ] P6 实际端点联调测试(本地 Ollama / vLLM 网关)
 
 ## 九、proposed API 使用说明
 

@@ -24,6 +24,11 @@ export function getProviderGroups(): KaiProviderGroup[] {
 	return groups.filter(g => g && Array.isArray(g.models) && g.models.length > 0 && (!g.vendor || g.vendor === CONFIG_VENDOR || g.vendor === PROVIDER_VENDOR));
 }
 
+/** 读取整个 secrets 映射（kaicustomendpoint.secrets），供批量解析引用时复用，避免重复读配置 */
+export function readSecretsMap(): Record<string, string> {
+	return vscode.workspace.getConfiguration(CONFIG_SECTION).get<Record<string, string>>(CONFIG_SECRETS_KEY.replace(`${CONFIG_SECTION}.`, ''), {}) ?? {};
+}
+
 /**
  * 解析 apiKey 中的 `${input:chat.lm.secret.xxx}` 引用。
  *
@@ -33,8 +38,11 @@ export function getProviderGroups(): KaiProviderGroup[] {
  *
  * 这与 VS Code Copilot 的 `chatLanguageModels.json` 中 `${input:...}` 语法兼容，
  * 用户从 chatLanguageModels.json 迁移时无需修改 apiKey 引用。
+ *
+ * @param secretsMap 预读的 secrets 映射（由 {@link readSecretsMap} 读取），
+ *                  避免在批量解析多个 group 时重复读配置；不传则每次内部读取
  */
-export function resolveSecret(value: string | undefined): string | undefined {
+export function resolveSecret(value: string | undefined, secretsMap?: Record<string, string>): string | undefined {
 	if (!value) {
 		return undefined;
 	}
@@ -43,9 +51,7 @@ export function resolveSecret(value: string | undefined): string | undefined {
 	}
 	// 字符串截取：${input:chat.lm.secret.xxx} → 取 prefix 之后、末尾 } 之前的部分
 	const secretId = value.slice(SECRET_REF_PREFIX.length, -1);
-	// 读取整个 secrets 对象再按 key 查找
-	// 不用点号路径 get('kaicustomendpoint.secrets.xxx')，因为对 additionalProperties 动态 key 不可靠
-	const secrets = vscode.workspace.getConfiguration(CONFIG_SECTION).get<Record<string, string>>(CONFIG_SECRETS_KEY.replace(`${CONFIG_SECTION}.`, ''), {});
+	const secrets = secretsMap ?? vscode.workspace.getConfiguration(CONFIG_SECTION).get<Record<string, string>>(CONFIG_SECRETS_KEY.replace(`${CONFIG_SECTION}.`, ''), {});
 	return secrets?.[secretId] ?? '';
 }
 

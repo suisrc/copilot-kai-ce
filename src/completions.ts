@@ -6,6 +6,7 @@
 import * as vscode from 'vscode';
 import { buildKaiCompletionRequest, streamKaiCompletions } from './client';
 import { resolveSecret } from './config';
+import { sanitizeCustomHeaders } from './provider';
 import { generateRequestUid, isLogEffort, logRequestError, logRequestStart, logResponseInfo, stripLogEffort } from './logger';
 import { countTextTokens } from './tokenizer';
 import { KaiInlineCompletionConfig, KaiInlineCompletionModelConfig } from './types';
@@ -37,6 +38,16 @@ const DEFAULT_MAX_OUTPUT_TOKENS = 256;
 
 /** 前缀最短有效字符数（过短时不触发，参考 Copilot 的 MIN_PROMPT_CHARS） */
 const MIN_PROMPT_CHARS = 1;
+
+/**
+ * 上下文窗口最大行数（前缀）：2048 token 预算通常 300 行内足够。
+ * 只取光标附近窗口，避免大文件全量 getText + 逐行 token 估算造成同步卡顿
+ * （键盘输入到补全请求发出的延迟）。
+ */
+const MAX_PREFIX_LINES = 300;
+
+/** 上下文窗口最大行数（后缀）：512 token 预算通常 100 行内足够 */
+const MAX_SUFFIX_LINES = 100;
 
 /** 取文本末尾不超过 maxTokens 的完整行（保持代码结构完整） */
 function trimPrefixByTokens(text: string, maxTokens: number): string {
@@ -117,10 +128,14 @@ export class KaiInlineCompletionProvider implements vscode.InlineCompletionItemP
 		}
 	}
 
-	/** 提取光标前后的上下文（按 token 预算裁剪） */
+	/** 提取光标前后的上下文（按 token 预算裁剪；窗口化避免大文件全量扫描） */
 	private extractContext(document: vscode.TextDocument, position: vscode.Position): { prefix: string; suffix: string } {
-		const prefixText = document.getText(new vscode.Range(new vscode.Position(0, 0), position));
-		const suffixText = document.getText(new vscode.Range(position, document.lineAt(document.lineCount - 1).range.end));
+		const prefixStart = new vscode.Position(Math.max(0, position.line - MAX_PREFIX_LINES), 0);
+		const prefixText = document.getText(new vscode.Range(prefixStart, position));
+
+		const suffixEndLine = Math.min(document.lineCount - 1, position.line + MAX_SUFFIX_LINES);
+		const suffixText = document.getText(new vscode.Range(position, document.lineAt(suffixEndLine).range.end));
+
 		return {
 			prefix: trimPrefixByTokens(prefixText, DEFAULT_PREFIX_TOKENS),
 			suffix: trimSuffixByTokens(suffixText, DEFAULT_SUFFIX_TOKENS),
@@ -240,12 +255,17 @@ export class KaiInlineCompletionProvider implements vscode.InlineCompletionItemP
 			headers['Authorization'] = `Bearer ${apiKey}`;
 		}
 
-		for (const [key, value] of Object.entries(model.requestHeaders ?? {})) {
-			// 用户自定义头覆盖默认头（大小写不敏感）
+		// 用户自定义头先经安全过滤（与 provider.ts 的 buildRequestHeaders 一致），
+		// 再覆盖默认头（大小写不敏感合并，支持 `${apiKey}` 插值）
+		const userHeaders = sanitizeCustomHeaders(model.requestHeaders);
+		for (const [key, value] of Object.entries(userHeaders)) {
 			const lowerKey = key.toLowerCase();
-			for (const existing of Object.keys(headers)) {
-				if (existing.toLowerCase() === lowerKey) {
-					delete headers[existing];
+			if (lowerKey === 'authorization' || lowerKey === 'api-key' || lowerKey === 'x-api-key' || lowerKey === 'x-goog-api-key' || lowerKey === 'content-type') {
+				// 覆盖默认鉴权头 / Content-Type：删除已设置的默认值，再写入用户值
+				for (const existing of Object.keys(headers)) {
+					if (existing.toLowerCase() === lowerKey) {
+						delete headers[existing];
+					}
 				}
 			}
 			headers[key] = apiKey ? value.split('${apiKey}').join(apiKey) : value;

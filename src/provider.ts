@@ -21,8 +21,9 @@ import {
 	streamSSE,
 } from './client';
 import { generateRequestUid, isLogEffort, logRequestError, logRequestStart, logResponseInfo, stripLogEffort } from './logger';
-import { countMessageTokens, countTextTokens } from './tokenizer';
-import { getProviderGroups, resolveSecret } from './config';
+import { countMessageTokens, countMessagesTokens, countTextTokens, countToolTokens } from './tokenizer';
+import type { TokenCountableMessage, TokenCountablePart } from './tokenizer';
+import { getProviderGroups, readSecretsMap, resolveSecret } from './config';
 import { ApiType, KaiModelConfig, PROVIDER_VENDOR } from './types';
 
 /**
@@ -60,12 +61,116 @@ export interface KaiModelInformation extends vscode.LanguageModelChatInformation
 
 /** 解析模型 token 限制（与 customendpoint 的 resolveModelTokenLimits 逻辑一致） */
 function resolveTokenLimits(model: KaiModelConfig): { maxInputTokens: number; maxOutputTokens: number } {
-	const contextWindow = model.contextWindow ?? ((model.maxInputTokens ?? 0) + (model.maxOutputTokens ?? 8192));
+	// maxInputTokens 与 contextWindow 均未配置时，给输入窗口一个合理默认（128000），
+	// 避免仅有 maxOutputTokens 时 contextWindow=0+maxOutputTokens 导致 maxInputTokens=0，
+	// 进而 VS Code Context Usage Widget / compaction 判定 context window 无效（totalContextWindow<=0）
+	const fallbackInputTokens = 128000;
+	const contextWindow = model.contextWindow ?? ((model.maxInputTokens ?? fallbackInputTokens) + (model.maxOutputTokens ?? 8192));
 	const maxOutputTokens = Math.min(model.maxOutputTokens ?? 8192, contextWindow);
 	const remainingInputBudget = Math.max(0, contextWindow - maxOutputTokens);
 	const maxInputTokens = Math.min(model.maxInputTokens ?? remainingInputBudget, remainingInputBudget);
 	return { maxInputTokens, maxOutputTokens };
 }
+
+/**
+ * VS Code Context Usage Widget / compaction 所需的 usage 结构（对应 Copilot 的 APIUsage）。
+ * 通过 `LanguageModelDataPart`（MIME `usage`）report，VS Code 据此显示上下文窗口使用量并触发压缩。
+ */
+interface ApiUsage {
+	prompt_tokens: number;
+	completion_tokens: number;
+	total_tokens: number;
+	prompt_tokens_details?: { cached_tokens: number };
+	completion_tokens_details?: { reasoning_tokens: number };
+}
+
+/** 将各协议返回的 usage 片段归一化为 ApiUsage（缺失字段补 0） */
+function toApiUsage(raw: {
+	prompt_tokens?: number; completion_tokens?: number; total_tokens?: number;
+	// OpenAI Chat Completions 风格
+	prompt_tokens_details?: { cached_tokens?: number };
+	completion_tokens_details?: { reasoning_tokens?: number; thinking_tokens?: number };
+	// OpenAI Responses API 风格（字段名不同）
+	input_tokens_details?: { cached_tokens?: number };
+	output_tokens_details?: { reasoning_tokens?: number; thinking_tokens?: number };
+	// Anthropic Messages 风格（顶层字段）
+	input_tokens?: number; output_tokens?: number;
+	cache_read_input_tokens?: number; cache_creation_input_tokens?: number;
+}): ApiUsage {
+	// Anthropic 的 input_tokens 只是非缓存部分，总输入 = input_tokens + cache_read + cache_creation
+	// （参考 Copilot 的 buildAnthropicCompletion: computedPromptTokens = inputTokens + cacheCreationTokens + cacheReadTokens）
+	// OpenAI 的 prompt_tokens / input_tokens 已是总值，直接用
+	const cacheRead = raw.cache_read_input_tokens ?? 0;
+	const cacheCreation = raw.cache_creation_input_tokens ?? 0;
+	const prompt = raw.prompt_tokens !== undefined
+		? raw.prompt_tokens  // OpenAI Chat Completions：prompt_tokens 已是总值
+		: (raw.input_tokens ?? 0) + cacheRead + cacheCreation;  // Anthropic：input_tokens + cache_read + cache_creation
+	const completion = raw.completion_tokens ?? raw.output_tokens ?? 0;
+	// cached_tokens：Chat Completions 用 prompt_tokens_details，Responses 用 input_tokens_details，Anthropic 用顶层 cache_read_input_tokens
+	const cached = raw.prompt_tokens_details?.cached_tokens
+		?? raw.input_tokens_details?.cached_tokens
+		?? cacheRead
+		?? 0;
+	// reasoning_tokens：Chat Completions 用 completion_tokens_details，Responses 用 output_tokens_details，Anthropic 用 thinking_tokens
+	const reasoning = raw.completion_tokens_details?.reasoning_tokens
+		?? raw.completion_tokens_details?.thinking_tokens
+		?? raw.output_tokens_details?.reasoning_tokens
+		?? raw.output_tokens_details?.thinking_tokens
+		?? 0;
+	return {
+		prompt_tokens: prompt,
+		completion_tokens: completion,
+		total_tokens: raw.total_tokens ?? (prompt + completion),
+		...(cached > 0 ? { prompt_tokens_details: { cached_tokens: cached } } : {}),
+		...(reasoning > 0 ? { completion_tokens_details: { reasoning_tokens: reasoning } } : {}),
+	};
+}
+
+/**
+ * 将 VS Code 聊天请求消息转换为 tokenizer.ts 可计数的 TokenCountableMessage。
+ * 供 provideTokenCount 与 usage fallback 复用，避免重复实现转换逻辑。
+ */
+function toTokenCountableMessage(message: vscode.LanguageModelChatRequestMessage): TokenCountableMessage {
+	const content: TokenCountablePart[] = [];
+	for (const part of message.content) {
+		if (part instanceof vscode.LanguageModelTextPart) {
+			content.push({ type: 'text', text: part.value });
+		} else if (part instanceof vscode.LanguageModelDataPart && part.mimeType.startsWith('image/')) {
+			content.push({
+				type: 'image_url',
+				image_url: { url: `data:${part.mimeType};base64,${bytesToBase64(part.data)}` },
+			});
+		} else if (part instanceof vscode.LanguageModelDataPart && part.mimeType === 'application/pdf') {
+			content.push({
+				type: 'document',
+				documentData: { data: bytesToBase64(part.data), mediaType: part.mimeType },
+			});
+		}
+	}
+
+	const msg: TokenCountableMessage = {
+		role: message.role === vscode.LanguageModelChatMessageRole.Assistant ? 'assistant'
+			: (message.role as number) === 3 ? 'system'
+				: 'user',
+		content: content.length > 0 ? content : '',
+		name: message.name,
+	};
+
+	// assistant 消息的工具调用也计入(与 customendpoint 一致)
+	if (message.role === vscode.LanguageModelChatMessageRole.Assistant) {
+		const toolCalls = message.content
+			.filter((part): part is vscode.LanguageModelToolCallPart => part instanceof vscode.LanguageModelToolCallPart)
+			.map(part => ({ id: part.callId, type: 'function', function: { name: part.name, arguments: JSON.stringify(part.input) } }));
+		if (toolCalls.length > 0) {
+			msg.tool_calls = toolCalls;
+		}
+	}
+
+	return msg;
+}
+
+/** usage data part 的 MIME type（与 Copilot 的 CustomDataPartMimeTypes.Usage 一致） */
+const USAGE_MIME_TYPE = 'usage';
 
 /**
  * 计算 configurationSchema 中 reasoningEffort 的默认展示值。
@@ -84,13 +189,16 @@ function resolveSchemaDefaultEffort(model: { supportsReasoningEffort?: string[];
 
 //#region 消息 / 工具转换
 
+/** 共享 TextDecoder，避免 serializeToolResult 等热路径重复创建 */
+const sharedTextDecoder = new TextDecoder();
+
 function serializeToolResult(content: ReadonlyArray<unknown>): string {
 	const texts: string[] = [];
 	for (const part of content) {
 		if (part instanceof vscode.LanguageModelTextPart) {
 			texts.push(part.value);
 		} else if (part instanceof vscode.LanguageModelDataPart) {
-			texts.push(new TextDecoder().decode(part.data));
+			texts.push(sharedTextDecoder.decode(part.data));
 		} else if (part && typeof part === 'object' && 'value' in part) {
 			const value = (part as { value: unknown }).value;
 			texts.push(typeof value === 'string' ? value : JSON.stringify(value));
@@ -197,9 +305,18 @@ function toOpenAIMessages(messages: readonly vscode.LanguageModelChatRequestMess
  * - 递归处理 properties、items、anyOf、allOf、oneOf 等嵌套结构
  * - 确保顶层有 type: 'object' 和 properties（参考 copilot 的 fnRules）
  */
+// 工具 schema 清理结果缓存：同一 schema 对象在多次请求间复用，避免递归重建（性能优化）
+const sanitizedSchemaCache = new WeakMap<object, Record<string, unknown>>();
+
 function sanitizeSchema(schema: unknown): Record<string, unknown> {
 	if (!schema || typeof schema !== 'object' || Array.isArray(schema)) {
 		return { type: 'object', properties: {} };
+	}
+
+	// 命中缓存直接返回（schema 对象不变则清理结果不变）
+	const cached = sanitizedSchemaCache.get(schema as object);
+	if (cached) {
+		return cached;
 	}
 
 	const result = sanitizeSchemaNode(schema);
@@ -210,6 +327,7 @@ function sanitizeSchema(schema: unknown): Record<string, unknown> {
 	if (result.type === 'object' && !result.properties) {
 		result.properties = {};
 	}
+	sanitizedSchemaCache.set(schema as object, result);
 	return result;
 }
 
@@ -461,8 +579,10 @@ const MAX_CUSTOM_HEADER_COUNT = 20;
  * 对用户自定义请求头做安全过滤。
  * 参考 copilot 的 OpenAIEndpoint._sanitizeCustomHeaders。
  * 鉴权头（api-key、authorization、x-api-key、x-goog-api-key、apikey）允许通过。
+ *
+ * 导出供 completions.ts 复用，确保 chat 与 FIM 两条路径的请求头安全过滤逻辑一致。
  */
-function sanitizeCustomHeaders(headers: Readonly<Record<string, string>> | undefined): Record<string, string> {
+export function sanitizeCustomHeaders(headers: Readonly<Record<string, string>> | undefined): Record<string, string> {
 	if (!headers) {
 		return {};
 	}
@@ -545,6 +665,8 @@ export class KaiCustomEndpointProvider implements vscode.LanguageModelChatProvid
 		// 仅从 settings.json（kaicustomendpoint.models）读取模型配置。
 		// 不使用 languageModelChatProviders contribution，避免 chatLanguageModels.json 重复。
 		const groups = getProviderGroups();
+		// 预读一次 secrets 映射，循环中复用，避免每个 group 重复读配置（性能优化）
+		const secretsMap = readSecretsMap();
 
 		const infos: KaiModelInformation[] = [];
 
@@ -596,7 +718,7 @@ export class KaiCustomEndpointProvider implements vscode.LanguageModelChatProvid
 					groupName: group.name,
 					endpointUrl,
 					apiType,
-					apiKey: resolveSecret(group.apiKey),
+					apiKey: resolveSecret(group.apiKey, secretsMap),
 					requestHeaders: model.requestHeaders,
 					modelOptions: model.modelOptions,
 					metadata: model.metadata,
@@ -689,6 +811,7 @@ export class KaiCustomEndpointProvider implements vscode.LanguageModelChatProvid
 
 		// 请求体原始文本：日志与 fetch 共用同一串，保证日志所见即网络所发
 		const bodyText = JSON.stringify(body);
+
 		if (logEnabled) {
 			logRequestStart({
 				uid: logUid!,
@@ -718,16 +841,17 @@ export class KaiCustomEndpointProvider implements vscode.LanguageModelChatProvid
 			const responseLogPromise = logEnabled ? logResponseInfo(response, logUid!, model.apiType) : undefined;
 
 			// 按协议分发流式解析
+			let usage: ApiUsage | undefined;
 			try {
 				switch (model.apiType) {
 					case 'chat-completions':
-						await this.processChatCompletionsStream(response, progress);
+						usage = await this.processChatCompletionsStream(response, progress);
 						break;
 					case 'responses':
-						await this.processResponsesStream(response, progress);
+						usage = await this.processResponsesStream(response, progress);
 						break;
 					case 'messages':
-						await this.processMessagesStream(response, progress);
+						usage = await this.processMessagesStream(response, progress);
 						break;
 				}
 			} finally {
@@ -737,6 +861,28 @@ export class KaiCustomEndpointProvider implements vscode.LanguageModelChatProvid
 					await responseLogPromise.catch(() => { /* 日志错误已打印，业务不感知 */ });
 				}
 			}
+
+			// report usage（VS Code Context Usage Widget / compaction 据此显示上下文窗口使用量并触发压缩）
+			// 与 Copilot 的 CustomDataPartMimeTypes.Usage 一致，MIME 为 'usage'，内容为 APIUsage JSON
+			// fallback：端点不返回 usage 或 prompt_tokens 为 0 时，用请求前估算的输入 token 代替
+			// （参考 Copilot 的 PromptRenderer.countTokens() 在请求前估算输入上下文）
+			const endpointPrompt = usage?.prompt_tokens ?? 0;
+			const endpointCompletion = usage?.completion_tokens ?? 0;
+			// 延迟估算：仅当端点未返回有效 prompt_tokens 时才计算（避免含图片消息时的 base64 编解码开销）
+			const promptTokens = endpointPrompt > 0
+				? endpointPrompt
+				: countMessagesTokens(messages.map(toTokenCountableMessage))
+					+ (options.tools && options.tools.length > 0
+						? countToolTokens(options.tools.map(t => ({ name: t.name, description: t.description, inputSchema: t.inputSchema as object })))
+						: 0);
+			const effectiveUsage: ApiUsage = {
+				prompt_tokens: promptTokens,
+				completion_tokens: endpointCompletion,
+				total_tokens: promptTokens + endpointCompletion,
+				...(usage?.prompt_tokens_details ? { prompt_tokens_details: usage.prompt_tokens_details } : {}),
+				...(usage?.completion_tokens_details ? { completion_tokens_details: usage.completion_tokens_details } : {}),
+			};
+			progress.report(new vscode.LanguageModelDataPart(new TextEncoder().encode(JSON.stringify(effectiveUsage)), USAGE_MIME_TYPE));
 		} catch (e) {
 			// -op 调试模式：请求异常（网络错误 / 非 2xx / 流解析错误）同样记录到 KaiCE 输出面板
 			if (logEnabled) {
@@ -899,13 +1045,18 @@ export class KaiCustomEndpointProvider implements vscode.LanguageModelChatProvid
 	private async processChatCompletionsStream(
 		response: Response,
 		progress: vscode.Progress<vscode.LanguageModelResponsePart>,
-	): Promise<void> {
+	): Promise<ApiUsage | undefined> {
 		// 累积工具调用增量（按 index 分组）
 		const toolCallAccumulators = new Map<number, { id?: string; name?: string; args: string }>();
+		let usage: ApiUsage | undefined;
 
 		for await (const chunk of streamChatCompletions(response)) {
 			if (chunk.error?.message) {
 				throw new Error(`Model request failed: ${chunk.error.message}`);
+			}
+			// usage 通常在最后一个 chunk（choices 为空），需在 continue 前收集
+			if (chunk.usage) {
+				usage = toApiUsage(chunk.usage);
 			}
 			const delta = chunk.choices?.[0]?.delta;
 			if (!delta) {
@@ -951,16 +1102,19 @@ export class KaiCustomEndpointProvider implements vscode.LanguageModelChatProvid
 			}
 			progress.report(new vscode.LanguageModelToolCallPart(accumulator.id, accumulator.name, input));
 		}
+
+		return usage;
 	}
 
 	/** 处理 /responses 流：output_text / function_call 增量组装 */
 	private async processResponsesStream(
 		response: Response,
 		progress: vscode.Progress<vscode.LanguageModelResponsePart>,
-	): Promise<void> {
+	): Promise<ApiUsage | undefined> {
 		// Responses API 的 function_call 增量按 item_id 组装（而非 index）
 		// 监听 response.output_item.added 初始化累积器，response.function_call_arguments.delta 累积参数
 		const toolCallAccumulators = new Map<string, { id: string; name?: string; args: string }>();
+		let usage: ApiUsage | undefined;
 		let pendingText = '';
 
 		const flushText = () => {
@@ -1001,6 +1155,18 @@ export class KaiCustomEndpointProvider implements vscode.LanguageModelChatProvid
 					if (typeof delta === 'string') {
 						pendingText += delta;
 					}
+					// 立即输出，避免整个 output item 生成期间 UI 无更新
+					// （与 chat-completions/messages 协议的逐 delta 实时输出保持一致）
+					flushText();
+					break;
+				}
+				// 推理/思考内容（如 o1 系列的 reasoning）实时输出，思考期间 UI 有反馈
+				case 'response.reasoning_summary_text.delta':
+				case 'response.reasoning_text.delta': {
+					const delta = data.delta;
+					if (typeof delta === 'string') {
+						progress.report(new vscode.LanguageModelTextPart(delta));
+					}
 					break;
 				}
 				case 'response.function_call_arguments.delta': {
@@ -1036,6 +1202,15 @@ export class KaiCustomEndpointProvider implements vscode.LanguageModelChatProvid
 					flushText();
 					break;
 				}
+				// response.completed 携带完整 usage（input/output tokens）
+				case 'response.completed': {
+					const resp = data.response as { usage?: Record<string, unknown> } | undefined;
+					if (resp?.usage) {
+						usage = toApiUsage(resp.usage as Parameters<typeof toApiUsage>[0]);
+					}
+					flushText();
+					break;
+				}
 				default:
 					flushText();
 					break;
@@ -1057,16 +1232,27 @@ export class KaiCustomEndpointProvider implements vscode.LanguageModelChatProvid
 			}
 			progress.report(new vscode.LanguageModelToolCallPart(accumulator.id, accumulator.name, input));
 		}
+
+		return usage;
 	}
 
 	/** 处理 /messages（Anthropic）流：content_block_delta / content_block_stop 增量组装 */
 	private async processMessagesStream(
 		response: Response,
 		progress: vscode.Progress<vscode.LanguageModelResponsePart>,
-	): Promise<void> {
+	): Promise<ApiUsage | undefined> {
 		// 工具调用按 block index 组装
 		const toolUseBlocks = new Map<number, { id?: string; name?: string; inputJson: string }>();
 		let currentToolUseIndex: number | undefined;
+		// Anthropic usage 累加器（参考 Copilot messagesApi.ts 的 AnthropicStreamingHandler）：
+		// message_start 初始化各字段，message_delta 逐字段更新（?? 保留已有值），
+		// 流结束后合并计算 prompt_tokens = input_tokens + cache_read + cache_creation
+		let inputTokens = 0;
+		let outputTokens = 0;
+		let cacheCreationTokens = 0;
+		let cacheReadTokens = 0;
+		let thinkingTokens: number | undefined;
+		let hasUsage = false;
 
 		for await (const sseEvent of streamSSE(response)) {
 			const data = sseEvent.data as Record<string, unknown> | undefined;
@@ -1081,6 +1267,22 @@ export class KaiCustomEndpointProvider implements vscode.LanguageModelChatProvid
 			}
 
 			switch (data.type) {
+				case 'message_start': {
+					// message_start 初始化所有 token 字段
+					const message = data.message as { usage?: Record<string, unknown> } | undefined;
+					if (message?.usage) {
+						const u = message.usage;
+						inputTokens = typeof u.input_tokens === 'number' ? u.input_tokens : 0;
+						outputTokens = typeof u.output_tokens === 'number' ? u.output_tokens : 0;
+						cacheCreationTokens = typeof u.cache_creation_input_tokens === 'number' ? u.cache_creation_input_tokens : 0;
+						cacheReadTokens = typeof u.cache_read_input_tokens === 'number' ? u.cache_read_input_tokens : 0;
+						thinkingTokens = typeof u.output_tokens_details === 'object' && u.output_tokens_details !== null
+							? (u.output_tokens_details as Record<string, unknown>).thinking_tokens as number | undefined
+							: undefined;
+						hasUsage = true;
+					}
+					break;
+				}
 				case 'content_block_start': {
 					const block = data.content_block as { type?: string; id?: string; name?: string } | undefined;
 					if (block?.type === 'tool_use') {
@@ -1091,9 +1293,13 @@ export class KaiCustomEndpointProvider implements vscode.LanguageModelChatProvid
 					break;
 				}
 				case 'content_block_delta': {
-					const delta = data.delta as { type?: string; text?: string; partial_json?: string } | undefined;
+					const delta = data.delta as { type?: string; text?: string; thinking?: string; partial_json?: string } | undefined;
 					if (delta?.type === 'text_delta' && typeof delta.text === 'string') {
 						progress.report(new vscode.LanguageModelTextPart(delta.text));
+					} else if (delta?.type === 'thinking_delta' && typeof delta.thinking === 'string') {
+						// 思考内容实时输出（与 chat-completions 的 reasoning_content 一致），
+						// 避免模型生成长思考期间 UI 无任何反馈
+						progress.report(new vscode.LanguageModelTextPart(delta.thinking));
 					} else if (delta?.type === 'input_json_delta' && typeof delta.partial_json === 'string') {
 						if (currentToolUseIndex !== undefined) {
 							const block = toolUseBlocks.get(currentToolUseIndex);
@@ -1122,8 +1328,39 @@ export class KaiCustomEndpointProvider implements vscode.LanguageModelChatProvid
 					}
 					break;
 				}
+				case 'message_delta': {
+					// message_delta provides the most accurate token counts（参考 Copilot messagesApi.ts）
+					// 逐字段更新：?? 保留 message_start 的值（message_delta 没有的字段不覆盖）
+					const u = data.usage as Record<string, unknown> | undefined;
+					if (u) {
+						outputTokens = typeof u.output_tokens === 'number' ? u.output_tokens : outputTokens;
+						inputTokens = typeof u.input_tokens === 'number' ? u.input_tokens : inputTokens;
+						cacheCreationTokens = typeof u.cache_creation_input_tokens === 'number' ? u.cache_creation_input_tokens : cacheCreationTokens;
+						cacheReadTokens = typeof u.cache_read_input_tokens === 'number' ? u.cache_read_input_tokens : cacheReadTokens;
+						thinkingTokens = typeof u.output_tokens_details === 'object' && u.output_tokens_details !== null
+							? (u.output_tokens_details as Record<string, unknown>).thinking_tokens as number | undefined
+							: thinkingTokens;
+						hasUsage = true;
+					}
+					break;
+				}
 			}
 		}
+
+		// SSE 流结束后合并 usage（参考 Copilot buildAnthropicCompletion）：
+		// prompt_tokens = input_tokens + cache_creation + cache_read
+		if (hasUsage) {
+			const promptTokens = inputTokens + cacheCreationTokens + cacheReadTokens;
+			const reasoning = thinkingTokens ?? 0;
+			return {
+				prompt_tokens: promptTokens,
+				completion_tokens: outputTokens,
+				total_tokens: promptTokens + outputTokens,
+				...(cacheReadTokens > 0 ? { prompt_tokens_details: { cached_tokens: cacheReadTokens } } : {}),
+				...(reasoning > 0 ? { completion_tokens_details: { reasoning_tokens: reasoning } } : {}),
+			};
+		}
+		return undefined;
 	}
 
 	async provideTokenCount(
@@ -1133,53 +1370,11 @@ export class KaiCustomEndpointProvider implements vscode.LanguageModelChatProvid
 	): Promise<number> {
 		// 参考 customendpoint 的 CopilotLanguageModelWrapper.provideTokenCount：
 		// - 纯字符串：直接字符估算计数
-		// - 消息：转换为 OpenAI 风格消息对象后 countMessageTokens(含 BaseTokensPerMessage)
+		// - 消息：转换为 TokenCountableMessage 后 countMessageTokens(含 BaseTokensPerMessage)
 		if (typeof text === 'string') {
 			return countTextTokens(text);
 		}
-
-		// 将 VS Code 消息的 parts 转换为可计数的 OpenAI 内容 part
-		type CountablePart =
-			| { type: 'text'; text: string }
-			| { type: 'image_url'; image_url: { url: string; detail?: string } }
-			| { type: 'document'; documentData: { data: string; mediaType: string } };
-
-		const content: CountablePart[] = [];
-		for (const part of text.content) {
-			if (part instanceof vscode.LanguageModelTextPart) {
-				content.push({ type: 'text', text: part.value });
-			} else if (part instanceof vscode.LanguageModelDataPart && part.mimeType.startsWith('image/')) {
-				content.push({
-					type: 'image_url',
-					image_url: { url: `data:${part.mimeType};base64,${bytesToBase64(part.data)}` },
-				});
-			} else if (part instanceof vscode.LanguageModelDataPart && part.mimeType === 'application/pdf') {
-				content.push({
-					type: 'document',
-					documentData: { data: bytesToBase64(part.data), mediaType: part.mimeType },
-				});
-			}
-		}
-
-		const message: { role: string; content: unknown; name?: string; tool_calls?: unknown[] } = {
-			role: text.role === vscode.LanguageModelChatMessageRole.Assistant ? 'assistant'
-				: (text.role as number) === 3 ? 'system'
-					: 'user',
-			content: content.length > 0 ? content : '',
-			name: text.name,
-		};
-
-		// assistant 消息的工具调用也计入(与 customendpoint 一致)
-		if (text.role === vscode.LanguageModelChatMessageRole.Assistant) {
-			const toolCalls = text.content
-				.filter((part): part is vscode.LanguageModelToolCallPart => part instanceof vscode.LanguageModelToolCallPart)
-				.map(part => ({ function: { name: part.name, arguments: JSON.stringify(part.input) }, id: part.callId, type: 'function' }));
-			if (toolCalls.length > 0) {
-				message.tool_calls = toolCalls;
-			}
-		}
-
-		return countMessageTokens(message as Record<string, unknown>);
+		return countMessageTokens(toTokenCountableMessage(text));
 	}
 }
 
